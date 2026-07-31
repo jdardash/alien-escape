@@ -1,0 +1,2 @@
+# Phaser 3 is vendored, not authored here. Keep it out of language stats.
+lib/** linguist-vendored
