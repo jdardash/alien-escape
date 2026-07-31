@@ -223,15 +223,30 @@ export function divePath(origin, playerX, screen) {
 }
 
 /**
+ * How many distinct Challenging Stage routes exist.
+ *
+ * The arcade has eight, and because they land on stages 3, 7, 11 ... the last
+ * of them is not seen until stage 31. Cycling fewer than eight is the single
+ * most common shortcut in a Galaga clone and it shows: the bonus round starts
+ * repeating itself less than halfway through a good run.
+ */
+export const CHALLENGING_PATTERN_COUNT = 8;
+
+/**
  * Challenging Stage fly-through.
  *
  * The bonus round is pure choreography: forty enemies trace a preset route and
- * leave without ever attacking. The arcade cycles several distinct patterns
+ * leave without ever attacking. The arcade cycles eight distinct patterns
  * rather than replaying one, so `pattern` selects between them and `offset`
  * spreads a group across the shape.
  *
  * Unlike an entry path, these never terminate in a formation slot. They enter
  * off screen and exit off screen.
+ *
+ * Every route is authored to stay well above the player: nothing can be hit
+ * during a bonus round, and a shape that swept the bottom of the field would
+ * read as a threat the player is wrong to dodge. `tests/paths.test.js` pins
+ * that for all eight.
  */
 export function challengingPath(pattern, offset, screen) {
   const { width, height } = screen;
@@ -241,7 +256,7 @@ export function challengingPath(pattern, offset, screen) {
   const mirrored = offset % 2 === 1;
   const side = mirrored ? -1 : 1;
 
-  switch (pattern % 4) {
+  switch (pattern % CHALLENGING_PATTERN_COUNT) {
     // Crossing streams: in from both top corners, cross at centre, exit low.
     case 0:
       return [
@@ -294,7 +309,7 @@ export function challengingPath(pattern, offset, screen) {
       ];
 
     // Figure eight through the middle band.
-    default:
+    case 3:
       return [
         [
           { x: mirrored ? -60 : width + 60, y: height * 0.3 },
@@ -313,6 +328,84 @@ export function challengingPath(pattern, offset, screen) {
           { x: width * 0.35, y: height * 0.15 },
           { x: mirrored ? width + 80 : -80, y: height * 0.18 },
           { x: mirrored ? width + 120 : -120, y: height * 0.25 },
+        ],
+      ];
+
+    // Descending zigzag: in from a top corner, three switchbacks widening as
+    // they fall, out through the opposite side.
+    case 4:
+      return [
+        [
+          { x: mirrored ? -60 : width + 60, y: -50 },
+          { x: width * 0.5, y: height * 0.08 },
+          { x: width * 0.18, y: height * 0.24 },
+          { x: width * 0.5, y: height * 0.34 },
+        ],
+        [
+          { x: width * 0.5, y: height * 0.34 },
+          { x: width * 0.82, y: height * 0.44 },
+          { x: width * 0.18, y: height * 0.54 },
+          { x: mirrored ? width + 80 : -80, y: height * 0.6 },
+        ],
+      ];
+
+    // Twin columns: straight down a lane with a slight weave, then a hard fan
+    // outward across the middle and away.
+    case 5:
+      return [
+        [
+          { x, y: -60 },
+          { x: x + side * 44, y: height * 0.16 },
+          { x: x - side * 44, y: height * 0.3 },
+          { x, y: height * 0.44 },
+        ],
+        [
+          { x, y: height * 0.44 },
+          { x: x + side * 250, y: height * 0.5 },
+          { x: width * 0.5, y: height * 0.62 },
+          { x: mirrored ? -80 : width + 80, y: height * 0.5 },
+        ],
+      ];
+
+    // Orbit: enter along the middle from one side, circle the centre of the
+    // field once, and leave the way the next group is arriving.
+    case 6:
+      return [
+        [
+          { x: mirrored ? -60 : width + 60, y: height * 0.4 },
+          { x: width * 0.18, y: height * 0.42 },
+          { x: width * 0.18, y: height * 0.14 },
+          { x: width * 0.5, y: height * 0.12 },
+        ],
+        [
+          { x: width * 0.5, y: height * 0.12 },
+          { x: width * 0.82, y: height * 0.1 },
+          { x: width * 0.84, y: height * 0.44 },
+          { x: width * 0.5, y: height * 0.5 },
+        ],
+        [
+          { x: width * 0.5, y: height * 0.5 },
+          { x: width * 0.28, y: height * 0.54 },
+          { x: width * 0.14, y: height * 0.3 },
+          { x: mirrored ? width + 90 : -90, y: height * 0.22 },
+        ],
+      ];
+
+    // Shallow S: a long lateral wave across the upper band, the flattest of
+    // the eight, which makes it the one that rewards leading the target.
+    default:
+      return [
+        [
+          { x: mirrored ? -60 : width + 60, y: height * 0.18 },
+          { x: width * 0.24, y: height * 0.36 },
+          { x: width * 0.76, y: height * 0.08 },
+          { x: width * 0.7, y: height * 0.28 },
+        ],
+        [
+          { x: width * 0.7, y: height * 0.28 },
+          { x: width * 0.64, y: height * 0.48 },
+          { x: width * 0.24, y: height * 0.2 },
+          { x: mirrored ? width + 90 : -90, y: height * 0.38 },
         ],
       ];
   }

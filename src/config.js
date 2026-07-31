@@ -67,7 +67,6 @@ export const PLAYER = {
   /** ~43px on screen. */
   scale: 43.008 / SPRITE_SOURCE_PX,
   bulletSpeed: 760,
-  fireCooldownMs: 180,
   respawnDelayMs: 1600,
   invulnerableMs: 2000,
   startingLives: 3,
@@ -118,6 +117,15 @@ export const DIVE = {
   returnDurationMs: 1500,
   bombChance: 0.65,
   bombSpeed: 360,
+  /**
+   * How many enemy bombs may exist at once.
+   *
+   * The arcade reserves exactly eight hardware sprites for enemy shots, and
+   * that ceiling is a real part of the difficulty: however many attackers are
+   * on screen, only eight bombs can be in the air. Without it, the late stages
+   * degenerate into an unreadable curtain rather than getting harder.
+   */
+  maxBombs: 8,
 };
 
 export const CAPTURE = {
@@ -214,8 +222,96 @@ export const ENEMY_TEXTURE = {
   zako: 'enemyBee',
 };
 
+/**
+ * A Boss Galaga's two health states, as a tint over its sprite.
+ *
+ * The arcade boss is green while it still has both hit points and changes
+ * colour the moment it takes the first one, which is the player's only cue
+ * that a second shot is needed. Sources agree on the green and disagree on
+ * the damaged colour, so the damaged state here simply drops the tint and
+ * lets the purple artwork show through, which satisfies both accounts of
+ * "no longer green".
+ *
+ * Doing this as a tint rather than as two sprites is deliberate: the repo
+ * has one boss texture, and a tint keeps the silhouette identical between
+ * the states so the change reads as damage rather than as a different enemy.
+ */
+export const BOSS_TINT = { healthy: 0x66ff66, damaged: null };
+
+/**
+ * Transform bonus enemies.
+ *
+ * From stage 4 the arcade periodically pulls a Zako out of the grid, pulsates
+ * it, and turns it into a trio of high-value bonus ships that attack and then
+ * leave. The pulse is not decoration: it is the only warning the player gets,
+ * and it is long enough here to be acted on.
+ *
+ * The repo ships no artwork for Scorpions, Bosconian Spy Ships or Galaxian
+ * Flagships, so each borrows an existing enemy silhouette and is filled with a
+ * flat colour (see `createTransformEnemy` for why filled and not tinted). The
+ * colours follow the sourced descriptions where there is one -- Scorpions are
+ * yellow and Spy Ships are green -- and the Flagship is given a pale blue that
+ * separates it from the red Goei sitting in formation behind it. Silhouettes
+ * are therefore not authentic; colour, cadence, cycle order and value are.
+ */
+export const TRANSFORM = {
+  /** How often the game may pull a Zako out, once the stage allows it. */
+  intervalMs: 15000,
+  /** Warning pulse before the change. */
+  pulseDurationMs: 260,
+  pulseRepeats: 5,
+  /** How long the trio's attack run lasts. */
+  runDurationMs: 3400,
+  /** Horizontal gap between the three ships as they set off. */
+  spacingX: 44,
+  art: {
+    scorpion: { texture: 'enemyBee', tint: 0xffdd33 },
+    spyShip: { texture: 'enemyBossTeal', tint: 0x66ff99 },
+    flagship: { texture: 'enemyBossRed', tint: 0x99ccff },
+  },
+};
+
+/**
+ * The stage flags along the bottom-right of the HUD.
+ *
+ * The arcade draws one small flag per denomination rather than a number, and
+ * the colour is how a player tells a 30 from a 50 at a glance. The repo has no
+ * flag artwork, so the six textures are generated at run time from these
+ * values: a pole with a coloured banner, sized to sit in the HUD strip.
+ *
+ * The colours are chosen for separation on a black field and are not claimed
+ * to match the cabinet's palette, which could not be sourced. The *shape* and
+ * the one-flag-per-denomination arrangement are the authentic parts; the
+ * denominations themselves come from `stageFlags` and are sourced.
+ */
+export const FLAG_ART = {
+  width: 19,
+  height: 22,
+  poleWidth: 2,
+  bannerHeight: 13,
+  poleColor: 0xc8c8d0,
+  colors: {
+    1: 0x66ddff,
+    5: 0xffdd44,
+    10: 0x44ff88,
+    20: 0xff7744,
+    30: 0xff55aa,
+    50: 0xffcc00,
+  },
+};
+
 export const CHALLENGING = {
   /** Enemies fly through without stopping; nothing shoots back. */
   passDurationMs: 4200,
-  staggerMs: 110,
+  /** Gap between successive enemies within one wave, single file. */
+  staggerMs: 150,
+  /**
+   * Gap between one wave of eight setting off and the next.
+   *
+   * The bonus round is five waves of eight, not one stream of forty. The
+   * interval is what makes it readable: a wave traces its route and is mostly
+   * clear before the next one enters, so the player can lead the line and take
+   * all eight rather than spraying at a continuous blur.
+   */
+  groupIntervalMs: 2400,
 };

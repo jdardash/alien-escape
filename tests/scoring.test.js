@@ -7,7 +7,26 @@ import {
   SECOND_EXTRA_LIFE,
   EXTRA_LIFE_INTERVAL,
   CHALLENGING_STAGE_HIT_POINTS,
+  transformSetPoints,
+  TRANSFORM_SET_SIZE,
 } from '../src/systems/scoring.js';
+import { TransformType } from '../src/systems/stages.js';
+
+describe('transform bonus sets', () => {
+  it('pays the arcade value for each completed set', () => {
+    expect(transformSetPoints(TransformType.SCORPION)).toBe(1000);
+    expect(transformSetPoints(TransformType.SPY_SHIP)).toBe(2000);
+    expect(transformSetPoints(TransformType.FLAGSHIP)).toBe(3000);
+  });
+
+  it('is scored per set of three, not per enemy', () => {
+    expect(TRANSFORM_SET_SIZE).toBe(3);
+  });
+
+  it('rejects an unknown transform type instead of scoring NaN', () => {
+    expect(() => transformSetPoints('mothership')).toThrow(/Unknown transform type/);
+  });
+});
 
 describe('formation values', () => {
   it('matches the arcade table', () => {

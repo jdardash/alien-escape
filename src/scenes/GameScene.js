@@ -24,6 +24,8 @@ import {
   SCREEN,
   SPRITE_SCALE,
   CHALLENGING,
+  FLAG_ART,
+  TRANSFORM,
 } from '../config.js';
 import {
   EnemyType,
@@ -50,6 +52,8 @@ import {
   extraLivesEarned,
   PERFECT_BONUS,
   CAPTURED_FIGHTER_POINTS,
+  transformSetPoints,
+  TRANSFORM_SET_SIZE,
 } from '../systems/scoring.js';
 import {
   isChallengingStage,
@@ -57,6 +61,7 @@ import {
   stageFlags,
   enemiesFireDuringEntry,
   challengingPatternIndex,
+  transformTypeFor,
 } from '../systems/stages.js';
 import {
   CaptureState,
@@ -76,7 +81,14 @@ import {
   isDiving,
   canBeginDive,
   settleIntoFormation,
+  showBossDamage,
+  createTransformEnemy,
 } from '../entities/enemy.js';
+
+/** Texture key for a stage flag of the given denomination. */
+function flagTextureKey(value) {
+  return `flag${value}`;
+}
 
 export class GameScene extends Phaser.Scene {
   constructor() {
@@ -92,6 +104,7 @@ export class GameScene extends Phaser.Scene {
     this.load.image('enemyBee', 'assets/images/galaga_enemy_bee.png');
     this.load.image('enemyBossRed', 'assets/images/galaga_enemy_boss_red.png');
     this.load.image('enemyBossPurple', 'assets/images/galaga_enemy_boss_purple.png');
+    this.load.image('enemyBossTeal', 'assets/images/galaga_enemy_boss_teal.png');
     this.load.image('explosion', 'assets/images/explosion.png');
     this.load.image('tractorBeam', 'assets/images/tractor_beam.png');
 
@@ -163,7 +176,6 @@ export class GameScene extends Phaser.Scene {
 
     this.player.body.setAllowGravity(false);
     this.dualFighter = null;
-    this.fireCooldown = 0;
   }
 
   createGroups() {
@@ -175,6 +187,11 @@ export class GameScene extends Phaser.Scene {
     // registered once here, rather than wired up and torn down every time one
     // is earned and lost.
     this.wingman = this.physics.add.group();
+
+    // A held captive is a target. Shooting your own fighter is a legal, scored
+    // move in the arcade, so the captive needs a body and an overlap of its
+    // own rather than being a decorative image riding on its captor.
+    this.captives = this.physics.add.group();
   }
 
   createHud() {
@@ -198,6 +215,7 @@ export class GameScene extends Phaser.Scene {
 
     this.lifeIcons = [];
     this.flagIcons = [];
+    this.createFlagTextures();
     this.refreshHud();
   }
 
@@ -242,6 +260,16 @@ export class GameScene extends Phaser.Scene {
       this.onPlayerHit();
     });
 
+    // Shooting your own captured fighter. Worth 1,000 and loses the ship for
+    // good -- the player gives up any chance of the dual fighter to take the
+    // points, which is the trade the arcade offers and the reason the captive
+    // is left hanging there in the formation rather than being untouchable.
+    this.physics.add.overlap(this.bullets, this.captives, (bullet, captive) => {
+      if (!bullet.active || !captive.active) return;
+      bullet.destroy();
+      this.onCaptiveShot();
+    });
+
     this.physics.add.overlap(this.wingman, this.enemyBullets, (_wingman, bullet) => {
       if (!this.canBeHurt() || !bullet.active) return;
       bullet.destroy();
@@ -262,6 +290,7 @@ export class GameScene extends Phaser.Scene {
     this.challengingHits = 0;
     this.difficulty = stageDifficulty(stage);
     this.challenging = isChallengingStage(stage);
+    this.transformType = transformTypeFor(stage);
 
     // A docked dual fighter carries over into the next stage; anything else
     // mid-sequence does not. Clearing the state but leaving the second ship on
@@ -340,6 +369,7 @@ export class GameScene extends Phaser.Scene {
       this.assemblyTimer = null;
       if (this.isGameOver || this.stageResolving) return;
       this.scheduleDives();
+      this.scheduleTransforms();
     });
   }
 
@@ -355,18 +385,30 @@ export class GameScene extends Phaser.Scene {
   /**
    * Challenging Stage: forty enemies fly through and never fire or dive.
    * Clearing all of them pays the perfect bonus.
+   *
+   * Structured like the entry wave, as five flights of eight rather than one
+   * forty-ship stream. Everyone in a flight shares one route and one lane, so
+   * the eight arrive nose to tail and can be swept with a single held line of
+   * fire; the lane changes between flights so the pattern is traced out across
+   * the field instead of being redrawn in the same place five times.
    */
   launchChallengingStage() {
     const pattern = challengingPatternIndex(this.stage) ?? 0;
+    const slots = buildFormationSlots();
 
-    buildFormationSlots().forEach((slot, index) => {
-      const path = challengingPath(pattern, index, SCREEN);
-      const enemy = createEnemy(this, this.enemies, slot, path[0][0]);
-      enemy.mode = EnemyMode.PASSING;
+    buildEntryGroups().forEach((group) => {
+      const groupDelay = group.index * CHALLENGING.groupIntervalMs;
+      // One offset for the whole flight: same curve, same lane, single file.
+      const path = challengingPath(pattern, group.index, SCREEN);
 
-      this.time.delayedCall(index * CHALLENGING.staggerMs, () => {
-        if (!enemy.active) return;
-        enemy.flight = createFlight(path, CHALLENGING.passDurationMs);
+      group.slotIndices.forEach((slotIndex, position) => {
+        const enemy = createEnemy(this, this.enemies, slots[slotIndex], path[0][0]);
+        enemy.mode = EnemyMode.PASSING;
+
+        this.time.delayedCall(groupDelay + position * CHALLENGING.staggerMs, () => {
+          if (!enemy.active) return;
+          enemy.flight = createFlight(path, CHALLENGING.passDurationMs);
+        });
       });
     });
   }
@@ -411,6 +453,79 @@ export class GameScene extends Phaser.Scene {
       loop: true,
       callback: () => this.attemptCapture(),
     });
+  }
+
+  scheduleTransforms() {
+    if (!this.transformType) return;
+
+    this.transformTimer = this.time.addEvent({
+      delay: TRANSFORM.intervalMs,
+      loop: true,
+      callback: () => this.triggerTransform(),
+    });
+  }
+
+  /**
+   * Pull a Zako out of the grid, pulsate it, and replace it with a bonus trio.
+   *
+   * Only a Zako is eligible, which is what the arcade does and also what keeps
+   * the formation's shape readable: the Goei rows and the boss row stay intact
+   * while the bottom of the grid thins out.
+   */
+  triggerTransform() {
+    if (this.isGameOver || this.challenging || !this.transformType) return;
+    if (!this.captureIsIdle()) return;
+
+    const eligible = this.enemies
+      .getChildren()
+      .filter((enemy) => enemy.enemyType === EnemyType.ZAKO && canBeginDive(enemy));
+    if (eligible.length === 0) return;
+
+    const chosen = Phaser.Utils.Array.GetRandom(eligible);
+    chosen.transforming = true;
+
+    // The pulse is the player's warning. The tween is what decides when the
+    // swap happens, so a transform can never fire on a frame where the Zako
+    // has already been shot: `onComplete` re-checks that it is still alive.
+    this.tweens.add({
+      targets: chosen,
+      scale: SPRITE_SCALE.enemy * 1.35,
+      duration: TRANSFORM.pulseDurationMs,
+      yoyo: true,
+      repeat: TRANSFORM.pulseRepeats,
+      onComplete: () => {
+        if (!chosen.active || this.isGameOver || this.stageResolving) return;
+        const origin = { x: chosen.x, y: chosen.y };
+        this.destroyEnemy(chosen, false);
+        this.spawnTransformSet(origin);
+      },
+    });
+  }
+
+  /**
+   * Three bonus ships abreast, each flying its own attack run from where the
+   * Zako was standing.
+   *
+   * They share one `set` object by reference; see `createTransformEnemy`. They
+   * are ordinary members of the enemy group, so every collider that already
+   * exists applies to them, and they leave off the bottom of the screen on
+   * their own if the player does not take them.
+   */
+  spawnTransformSet(origin) {
+    const art = TRANSFORM.art[this.transformType];
+    const set = { type: this.transformType, remaining: TRANSFORM_SET_SIZE };
+
+    for (let i = 0; i < TRANSFORM_SET_SIZE; i += 1) {
+      const start = {
+        x: origin.x + (i - (TRANSFORM_SET_SIZE - 1) / 2) * TRANSFORM.spacingX,
+        y: origin.y,
+      };
+      const enemy = createTransformEnemy(this, this.enemies, art, start, set);
+      enemy.flight = createFlight(
+        divePath(start, this.player.x, SCREEN),
+        TRANSFORM.runDurationMs,
+      );
+    }
   }
 
   /**
@@ -604,10 +719,11 @@ export class GameScene extends Phaser.Scene {
 
     const boss = this.captor;
     if (boss && boss.active) {
-      this.captive = this.add
-        .image(boss.x, boss.y + CAPTURE.captiveOffsetY, 'capturedShip')
+      this.captive = this.captives
+        .create(boss.x, boss.y + CAPTURE.captiveOffsetY, 'capturedShip')
         .setScale(PLAYER.scale)
         .setDepth(6);
+      this.captive.body.setAllowGravity(false);
       boss.captiveAttached = true;
 
       // The captor rejoins the formation with its prize in tow, so the player
@@ -691,6 +807,21 @@ export class GameScene extends Phaser.Scene {
 
     this.stats = recordHit(this.stats);
 
+    // A transform bonus ship is priced by the set, not individually, so the
+    // kill is counted against the shared set and only the third one pays.
+    if (enemy.transformSet) {
+      const set = enemy.transformSet;
+      set.remaining -= 1;
+      this.destroyEnemy(enemy, true);
+
+      if (set.remaining === 0) {
+        const points = transformSetPoints(set.type);
+        this.addScore(points);
+        this.showBanner(String(points), 1100);
+      }
+      return;
+    }
+
     if (this.challenging) {
       this.challengingHits += 1;
       this.addScore(scoreFor(enemy.enemyType, { challenging: true }));
@@ -702,7 +833,7 @@ export class GameScene extends Phaser.Scene {
 
     // A Boss Galaga survives its first hit and changes colour to show it.
     if (enemy.health > 0) {
-      enemy.setTint(0x4488ff);
+      showBossDamage(enemy);
       return;
     }
 
@@ -730,6 +861,33 @@ export class GameScene extends Phaser.Scene {
     } else if (outcome === RescueOutcome.CAPTIVE_LOST) {
       this.loseCaptive();
     }
+  }
+
+  /**
+   * The player shot their own captured fighter.
+   *
+   * Counts as a hit, pays 1,000, and ends the capture: the captor is unflagged
+   * so that killing it later cannot rescue a ship that no longer exists, and
+   * the state machine is driven to IDLE through the same `CAPTIVE_DESTROYED`
+   * transition the "captor died in formation" path uses.
+   */
+  onCaptiveShot() {
+    if (!this.captive) return;
+
+    this.stats = recordHit(this.stats);
+    this.addScore(CAPTURED_FIGHTER_POINTS);
+    this.showBanner(String(CAPTURED_FIGHTER_POINTS), 1100);
+
+    if (this.captor) this.captor.captiveAttached = false;
+    this.captureState = transition(this.captureState, CaptureEvent.CAPTIVE_DESTROYED);
+
+    const burst = this.add
+      .sprite(this.captive.x, this.captive.y, 'explosion')
+      .setScale(SPRITE_SCALE.explosion);
+    this.time.delayedCall(220, () => burst.destroy());
+    this.sfx.explosion.play({ volume: 0.4 });
+
+    this.clearCaptive();
   }
 
   /**
@@ -878,7 +1036,7 @@ export class GameScene extends Phaser.Scene {
     this.formationElapsed += delta;
 
     this.updateFormation(delta);
-    this.updatePlayer(delta);
+    this.updatePlayer();
     this.updateCaptive();
     this.updateBeam(delta);
     this.cullProjectiles();
@@ -953,6 +1111,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   fireEnemyBullet(enemy) {
+    if (this.enemyBullets.countActive(true) >= DIVE.maxBombs) return;
+
     const bullet = this.enemyBullets
       .create(enemy.x, enemy.y + 18, 'laser')
       .setScale(SPRITE_SCALE.laser);
@@ -962,7 +1122,7 @@ export class GameScene extends Phaser.Scene {
     bullet.setVelocity(Math.cos(angle) * DIVE.bombSpeed, Math.sin(angle) * DIVE.bombSpeed);
   }
 
-  updatePlayer(delta) {
+  updatePlayer() {
     if (!this.player.active) return;
 
     const left = this.keys.left.isDown || this.keys.altLeft.isDown;
@@ -973,7 +1133,6 @@ export class GameScene extends Phaser.Scene {
       this.dualFighter.setPosition(this.player.x + DUAL_FIGHTER_OFFSET_X, this.player.y);
     }
 
-    this.fireCooldown = Math.max(this.fireCooldown - delta, 0);
     if (Phaser.Input.Keyboard.JustDown(this.keys.fire)) this.fire();
   }
 
@@ -981,9 +1140,15 @@ export class GameScene extends Phaser.Scene {
    * Galaga's two-bullet limit, doubled while the dual fighter is docked. It is
    * the central constraint of the game: it makes the hit-miss ratio meaningful
    * and stops the player from holding down fire.
+   *
+   * The limit is the *only* gate. There is deliberately no rate-of-fire timer:
+   * in the arcade a shot that connects frees its slot immediately, so accurate
+   * close-range play is rewarded with a faster gun. A flat cooldown, which an
+   * earlier revision had at 180ms, severs that link and is what makes most
+   * clones feel sluggish. What stops the player holding down fire is that each
+   * miss occupies a slot until it flies off the top of the screen.
    */
   fire() {
-    if (this.fireCooldown > 0) return;
     if (this.bullets.countActive(true) >= bulletLimit(this.captureState)) return;
 
     this.spawnBullet(this.player.x);
@@ -995,7 +1160,6 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.stats = recordShot(this.stats, shots);
-    this.fireCooldown = PLAYER.fireCooldownMs;
     this.sfx.fire.play({ volume: 0.3 });
   }
 
@@ -1110,23 +1274,51 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  /**
+   * Build one flag texture per denomination.
+   *
+   * Generated rather than loaded because the repo ships no flag artwork. Each
+   * is drawn once into a texture and then instanced as an image, so a stage
+   * showing nine flags costs nine sprites rather than nine redraws.
+   */
+  createFlagTextures() {
+    const { width, height, poleWidth, bannerHeight, poleColor, colors } = FLAG_ART;
+
+    for (const [value, color] of Object.entries(colors)) {
+      const key = flagTextureKey(Number(value));
+      if (this.textures.exists(key)) continue;
+
+      const gfx = this.make.graphics({ add: false });
+
+      gfx.fillStyle(poleColor, 1).fillRect(0, 0, poleWidth, height);
+      gfx.fillStyle(color, 1).fillRect(poleWidth, 1, width - poleWidth, bannerHeight);
+      // A darker band along the bottom of the banner keeps the lighter
+      // denominations from washing out against the starfield.
+      gfx.fillStyle(0x000000, 0.35).fillRect(poleWidth, bannerHeight - 3, width - poleWidth, 3);
+
+      gfx.generateTexture(key, width, height);
+      gfx.destroy();
+    }
+  }
+
   drawFlags() {
     this.flagIcons.forEach((icon) => icon.destroy());
     this.flagIcons = [];
 
-    let x = SCREEN.width - 20;
+    // Laid out right to left, highest denomination outermost, which is the
+    // order `stageFlags` returns them in.
+    let x = SCREEN.width - 12;
     for (const flag of stageFlags(this.stage)) {
       for (let i = 0; i < flag.count; i += 1) {
         this.flagIcons.push(
           this.add
-            .text(x, SCREEN.height - 24, String(flag.value), {
-              font: '13px monospace',
-              fill: flag.value >= 30 ? '#ffcc00' : '#66ddff',
-            })
-            .setOrigin(1, 0.5)
+            .image(x, SCREEN.height - 14, flagTextureKey(flag.value))
+            .setOrigin(1, 1)
             .setDepth(20),
         );
-        x -= 26;
+        // Ones are drawn shoulder to shoulder, as the arcade does; the larger
+        // denominations get a little air so the groups stay countable.
+        x -= flag.value === 1 ? FLAG_ART.width + 2 : FLAG_ART.width + 6;
       }
     }
   }
@@ -1138,5 +1330,7 @@ export class GameScene extends Phaser.Scene {
     this.diveTimer = null;
     this.captureTimer?.remove();
     this.captureTimer = null;
+    this.transformTimer?.remove();
+    this.transformTimer = null;
   }
 }

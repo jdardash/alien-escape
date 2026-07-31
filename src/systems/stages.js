@@ -8,6 +8,10 @@
  * them can stay aggressive.
  */
 
+import { CHALLENGING_PATTERN_COUNT } from './paths.js';
+
+export { CHALLENGING_PATTERN_COUNT };
+
 /** Stage 3, then 7, 11, 15, and so on. */
 export function isChallengingStage(stage) {
   if (stage < 3) return false;
@@ -26,14 +30,17 @@ export function enemiesFireDuringEntry(stage) {
 }
 
 /**
- * Which Challenging Stage this is, counting from zero.
+ * Which of the eight Challenging Stage routes this stage flies.
  *
- * The arcade cycles a set of distinct preset routes rather than replaying one,
- * so the bonus round reads as choreography. Returns null for a normal stage.
+ * The arcade cycles eight distinct preset routes and repeats them after stage
+ * 31, so the bonus round reads as choreography rather than as a replay. The
+ * wrap lives here rather than in `challengingPath` so that "which pattern is
+ * stage N" is answerable without touching the geometry. Returns null for a
+ * normal stage.
  */
 export function challengingPatternIndex(stage) {
   if (!isChallengingStage(stage)) return null;
-  return Math.floor((stage - 3) / 4);
+  return Math.floor((stage - 3) / 4) % CHALLENGING_PATTERN_COUNT;
 }
 
 /**
@@ -57,6 +64,41 @@ export function stageDifficulty(stage) {
     diveSpeed: Math.min(1 + ramp * 0.045, 1.7),
     escortChance: Math.min(0.2 + ramp * 0.03, 0.75),
   };
+}
+
+/**
+ * The three kinds of transform bonus enemy, in the order the arcade cycles
+ * them.
+ *
+ * From stage 4 the game periodically pulls a Zako out of formation, pulsates
+ * it, and turns it into a trio of high-value bonus enemies. It is the main
+ * reason stage 6 does not look like stage 2, and skipping it is why most
+ * clones plateau visually after the first few rounds.
+ */
+export const TransformType = {
+  SCORPION: 'scorpion',
+  SPY_SHIP: 'spyShip',
+  FLAGSHIP: 'flagship',
+};
+
+const TRANSFORM_CYCLE = [TransformType.SCORPION, TransformType.SPY_SHIP, TransformType.FLAGSHIP];
+
+/**
+ * Which transform enemy this stage produces, or null for none.
+ *
+ * The arcade runs Scorpions on stages 4-6, Bosconian Spy Ships on 8-10 and
+ * Galaxian Flagships on 12-14, then repeats in the same order. Those runs are
+ * exactly the three normal stages that sit between two Challenging Stages,
+ * which is why the group index is `(stage - 4) / 4` rather than a count of
+ * normal stages: it advances once per challenging stage, keeping each type
+ * pinned to its own block however the run goes.
+ *
+ * Challenging Stages themselves return null. There is no formation during one,
+ * so there is nothing to pull a Zako out of.
+ */
+export function transformTypeFor(stage) {
+  if (stage < 4 || isChallengingStage(stage)) return null;
+  return TRANSFORM_CYCLE[Math.floor((stage - 4) / 4) % TRANSFORM_CYCLE.length];
 }
 
 /** Flag denominations shown bottom-right, highest first. */

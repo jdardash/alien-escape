@@ -10,6 +10,7 @@ import {
   challengingPath,
 } from '../src/systems/paths.js';
 import { SCREEN, PLAYER } from '../src/config.js';
+import { CHALLENGING_PATTERN_COUNT } from '../src/systems/stages.js';
 
 // The real field, so the invariants below are pinned against what actually
 // ships rather than against a landscape screen this game no longer uses.
@@ -182,7 +183,7 @@ describe('dive runs', () => {
 
 describe('challenging stage choreography', () => {
   it('enters and exits off screen, never stopping in formation', () => {
-    for (let pattern = 0; pattern < 4; pattern += 1) {
+    for (let pattern = 0; pattern < CHALLENGING_PATTERN_COUNT; pattern += 1) {
       for (let offset = 0; offset < 6; offset += 1) {
         const path = challengingPath(pattern, offset, screen);
         const start = pointOnPath(path, 0);
@@ -198,7 +199,7 @@ describe('challenging stage choreography', () => {
   });
 
   it('keeps clear of the player, who cannot be hit during a bonus round', () => {
-    for (let pattern = 0; pattern < 4; pattern += 1) {
+    for (let pattern = 0; pattern < CHALLENGING_PATTERN_COUNT; pattern += 1) {
       for (let offset = 0; offset < 6; offset += 1) {
         const path = challengingPath(pattern, offset, screen);
         for (let t = 0; t <= 1; t += 0.01) {
@@ -217,8 +218,9 @@ describe('challenging stage choreography', () => {
         })
         .join('|');
 
-    const signatures = [0, 1, 2, 3].map(signature);
-    expect(new Set(signatures).size).toBe(4);
+    const patterns = Array.from({ length: CHALLENGING_PATTERN_COUNT }, (_, i) => i);
+    const signatures = patterns.map(signature);
+    expect(new Set(signatures).size).toBe(CHALLENGING_PATTERN_COUNT);
   });
 
   it('spreads a group across lanes rather than stacking them', () => {

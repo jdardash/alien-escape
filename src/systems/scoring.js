@@ -9,6 +9,7 @@
  */
 
 import { EnemyType } from './formation.js';
+import { TransformType } from './stages.js';
 
 /** Points for a target hit while it is still in formation. */
 const FORMATION_VALUES = {
@@ -31,6 +32,34 @@ const DIVING_BOSS_VALUES = [400, 800, 1600];
 
 /** Shooting your own captured fighter off the boss that took it. */
 export const CAPTURED_FIGHTER_POINTS = 1000;
+
+/**
+ * A transform bonus arrives as a trio, and the arcade prices the trio rather
+ * than the individual ships.
+ */
+export const TRANSFORM_SET_SIZE = 3;
+
+const TRANSFORM_SET_VALUES = {
+  [TransformType.SCORPION]: 1000,
+  [TransformType.SPY_SHIP]: 2000,
+  [TransformType.FLAGSHIP]: 3000,
+};
+
+/**
+ * Points for destroying a complete set of three transform bonus enemies.
+ *
+ * Paid on the third kill, not split across the three. That is what the sourced
+ * values describe — "worth 1,000 for the set of three" — and it is also what
+ * makes the trio a decision: chasing all three is worth far more than picking
+ * one off, so a player has to choose between the bonus and staying safe.
+ * A partial set pays nothing, which is the conservative reading of a source
+ * that only ever quotes a per-set figure.
+ */
+export function transformSetPoints(type) {
+  const value = TRANSFORM_SET_VALUES[type];
+  if (value === undefined) throw new Error(`Unknown transform type: ${type}`);
+  return value;
+}
 
 /** Every hit during a Challenging Stage is worth a flat 100. */
 export const CHALLENGING_STAGE_HIT_POINTS = 100;

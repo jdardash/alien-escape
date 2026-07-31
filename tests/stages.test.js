@@ -5,6 +5,9 @@ import {
   stageFlags,
   enemiesFireDuringEntry,
   challengingPatternIndex,
+  CHALLENGING_PATTERN_COUNT,
+  transformTypeFor,
+  TransformType,
 } from '../src/systems/stages.js';
 
 describe('challenging stage cadence', () => {
@@ -97,9 +100,63 @@ describe('challenging stage patterns', () => {
     expect(challengingPatternIndex(11)).toBe(2);
   });
 
-  it('cycles rather than growing without bound once modulo is applied', () => {
-    const indices = [3, 7, 11, 15, 19].map((s) => challengingPatternIndex(s) % 4);
-    expect(new Set(indices).size).toBeGreaterThan(1);
+  it('gives the first eight challenging stages eight different patterns', () => {
+    const stages = [3, 7, 11, 15, 19, 23, 27, 31];
+    const indices = stages.map(challengingPatternIndex);
+    expect(indices).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  it('repeats the cycle after stage 31, as the arcade does', () => {
+    expect(challengingPatternIndex(35)).toBe(0);
+    expect(challengingPatternIndex(39)).toBe(1);
+    expect(challengingPatternIndex(63)).toBe(7);
+  });
+
+  it('never returns an index outside the pattern set', () => {
+    for (let stage = 3; stage <= 200; stage += 4) {
+      const index = challengingPatternIndex(stage);
+      expect(index).toBeGreaterThanOrEqual(0);
+      expect(index).toBeLessThan(CHALLENGING_PATTERN_COUNT);
+    }
+  });
+});
+
+describe('transform bonus enemies', () => {
+  it('does not appear before stage 4', () => {
+    expect(transformTypeFor(1)).toBeNull();
+    expect(transformTypeFor(2)).toBeNull();
+    expect(transformTypeFor(3)).toBeNull();
+  });
+
+  it('runs scorpions for the three stages after the first challenging stage', () => {
+    expect(transformTypeFor(4)).toBe(TransformType.SCORPION);
+    expect(transformTypeFor(5)).toBe(TransformType.SCORPION);
+    expect(transformTypeFor(6)).toBe(TransformType.SCORPION);
+  });
+
+  it('runs spy ships on stages 8 to 10', () => {
+    expect(transformTypeFor(8)).toBe(TransformType.SPY_SHIP);
+    expect(transformTypeFor(9)).toBe(TransformType.SPY_SHIP);
+    expect(transformTypeFor(10)).toBe(TransformType.SPY_SHIP);
+  });
+
+  it('runs flagships on stages 12 to 14', () => {
+    expect(transformTypeFor(12)).toBe(TransformType.FLAGSHIP);
+    expect(transformTypeFor(13)).toBe(TransformType.FLAGSHIP);
+    expect(transformTypeFor(14)).toBe(TransformType.FLAGSHIP);
+  });
+
+  it('repeats the three types in the same order from stage 16', () => {
+    expect(transformTypeFor(16)).toBe(TransformType.SCORPION);
+    expect(transformTypeFor(20)).toBe(TransformType.SPY_SHIP);
+    expect(transformTypeFor(24)).toBe(TransformType.FLAGSHIP);
+    expect(transformTypeFor(28)).toBe(TransformType.SCORPION);
+  });
+
+  it('never appears during a challenging stage, which has no formation to pull from', () => {
+    for (let stage = 1; stage <= 60; stage += 1) {
+      if (isChallengingStage(stage)) expect(transformTypeFor(stage)).toBeNull();
+    }
   });
 });
 
