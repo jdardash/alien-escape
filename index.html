@@ -1,23 +1,57 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <title>Alien Escape</title>
-  <script src="https://cdn.jsdelivr.net/npm/phaser@3.55.2/dist/phaser.min.js"></script>
-  <script src="src/Scenes/TitleScene.js"></script>
-  <script src="src/Scenes/GameScene.js"></script>
-  <script src="src/Scenes/GameOverScene.js"></script>
-  <script src="src/main.js"></script>
-  <style>
-    body {
-      margin: 0;
-      background: black;
-    }
-    canvas {
-      display: block;
-      margin: 0 auto;
-    }
-  </style>
-</head>
-<body></body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Alien Escape: a Galaga tribute</title>
+
+    <!--
+      Inline so the page ships no request the repository cannot answer. Without
+      it every load spends a round trip on a 404 for /favicon.ico, which is
+      noise in the console of a page whose whole point is that it works.
+    -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23000'/%3E%3Cpath d='M7 2h2v3h3v3h2v4h-3v-2h-2v2H7v-2H5v2H2V8h2V5h3z' fill='%23ffcc00'/%3E%3C/svg%3E"
+    />
+
+    <!--
+      Phaser is vendored in lib/ rather than pulled from a CDN, so the published
+      demo has no external dependency and keeps working if the CDN is blocked.
+      It loads as a classic script because it publishes a global; module
+      scripts are deferred, so main.js still runs after this.
+    -->
+    <script src="lib/phaser.js"></script>
+    <script type="module" src="src/main.js"></script>
+
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #000;
+        overflow: hidden;
+      }
+
+      /*
+        The parent is a plain block filling the window, and nothing here tries
+        to centre the canvas. Phaser's CENTER_BOTH already does that by setting
+        a margin against the parent's box, so flex-centring the same element
+        applied the offset twice and pushed a portrait canvas off to the right
+        of a landscape window.
+      */
+      #game {
+        height: 100%;
+      }
+
+      canvas {
+        display: block;
+        image-rendering: pixelated;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="game"></div>
+  </body>
 </html>

@@ -1,0 +1,9 @@
+node_modules/
+coverage/
+.DS_Store
+
+# Local agent tooling and session notes, not part of the published project
+.claude/
+CLAUDE.md
+docs/superpowers/
+.playwright-mcp/

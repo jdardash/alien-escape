@@ -1,2 +1,15 @@
+# Normalize line endings. Developed on Windows, linted and tested on Linux CI,
+# and served as-is by GitHub Pages, so text files are stored and checked out
+# with LF everywhere.
+* text=auto eol=lf
+
+# Binary game assets. Never subject to eol conversion or textual diffing.
+*.png binary
+*.mp3 binary
+*.ogg binary
+*.wav binary
+*.jpg binary
+*.ico binary
+
 # Phaser 3 is vendored, not authored here. Keep it out of language stats.
 lib/** linguist-vendored

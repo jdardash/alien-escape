@@ -1,0 +1,43 @@
+{
+  "name": "alien-escape",
+  "version": "1.0.0",
+  "description": "A Galaga tribute built with Phaser 3, with the game rules split into pure, unit-tested modules.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "author": "Josh Dardashti (https://github.com/jdardash)",
+  "contributors": [
+    "Josh Dardashti (https://github.com/jdardash)",
+    "Charles Li (https://github.com/Charlesli428)"
+  ],
+  "homepage": "https://jdardash.github.io/alien-escape/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jdardash/alien-escape.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jdardash/alien-escape/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "serve": "python -m http.server 8000"
+  },
+  "keywords": [
+    "phaser3",
+    "galaga",
+    "game-development",
+    "javascript",
+    "html5-game"
+  ],
+  "devDependencies": {
+    "eslint": "^9.17.0",
+    "jsdom": "^25.0.1",
+    "vitest": "^2.1.8"
+  }
+}
