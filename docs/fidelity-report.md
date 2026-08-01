@@ -555,7 +555,48 @@ a Challenging Stage that ended short of forty. All 28 files are now wired, and
 event, which is how the previous twenty-one came to be sitting there unreferenced in the
 first place.
 
-## 6. Overall verdict
+## 6. What the fourth pass closed
+
+The third pass ended claiming one open remainder: the stage-to-entrance-pattern mapping, "which
+cannot be closed without a source". A source was then found — a reverse-engineering corpus derived
+from the Galaga Z80 ROM, at
+[`ZaneLogi/ZaneLogi.github.io/galaga_clone`](https://github.com/ZaneLogi/ZaneLogi.github.io/tree/main/galaga_clone),
+citing routine addresses and data tables directly. It settled that item and overturned four others
+this report had recorded as "matches". The full pass is in
+[`galaga-audit-2026-07-31-pass4.md`](galaga-audit-2026-07-31-pass4.md); what changed here:
+
+**Four rows of the table in section 1 were wrong.**
+
+- *Boss damage colour.* The table recorded the sources as disagreeing between blue and purple and
+  said purple was taken. The ROM account is unambiguous — "the first hit changes the boss's palette
+  from green to blue" — so `BOSS_DAMAGED` is blue.
+- *The captured fighter.* Drawn drained, in grey and violet. On capture the arcade "recolors to red
+  (sprite code 7)" and holds it. Now red.
+- *Transform bonus scoring.* Priced per set of three, with a partial set worth nothing, on the
+  reading that the sources only quoted a per-set figure. A per-ship figure of 160 exists alongside
+  them, so `transformKillPoints` pays 160 a ship and the set bonus on the third.
+- *Entrance patterns.* Three, cycling `(stage - 1) % 3`. The ROM holds thirteen caravan rows indexed
+  through a seventeen-row-per-rank table with a wrap past stage 23. `combatStageIndex` reproduces
+  that index arithmetic; the three authored shapes remain three, and the code now says which half of
+  that is authentic.
+
+**Five behaviours were missing rather than wrong.**
+
+The capture boss did not aim at the player, so the beam opened over whatever column the boss
+happened to occupy; captures ran off a bare twelve-second clock with no stage or enemy-count gate;
+stage 1 bombed, where the arcade's opening difficulty row disables bombing outright; the transform
+trio never fired; and the challenging stage flew the full 4/16/20 formation roster rather than one
+rank plus four Boss Galaga. All five are closed, the rules test-first in `src/systems/stages.js`
+and `src/systems/scoring.js`.
+
+**And the cabinet around the game arrived.** Sections 1-5 audit the game between "STAGE 1" and
+"GAME OVER" and never look either side of it. Galaga's attract mode — logo, the chart of what every
+enemy is worth, the bonus ladder, the board — is the part a passer-by sees before deciding to play,
+and none of it existed. `TitleScene` is now that loop, with every figure on the value chart read
+from `scoreFor()` at draw time so the chart cannot drift from the table it documents. Demo play, the
+one part of the attract cycle where the machine plays itself, is still not implemented.
+
+## 7. Overall verdict
 
 The numbers were right from the start and everything else has since caught up. Every
 constant that can be looked up in a strategy guide — scoring, extra lives, formation

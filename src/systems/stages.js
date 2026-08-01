@@ -9,7 +9,7 @@
  */
 
 import { CHALLENGING_PATTERN_COUNT } from './paths.js';
-import { ENTRANCE_PATTERN_COUNT } from './formation.js';
+import { ENTRANCE_PATTERN_COUNT, EnemyType, FORMATION_SIZE } from './formation.js';
 
 export { CHALLENGING_PATTERN_COUNT, ENTRANCE_PATTERN_COUNT };
 
@@ -55,6 +55,47 @@ export function enemiesFireDuringEntry(stage) {
 }
 
 /**
+ * Whether enemies drop bombs at all this stage, arriving or attacking.
+ *
+ * Stage 1 is not merely gentle in the arcade, it is unarmed: the per-stage
+ * difficulty table (`bmbr_stg_cfg_dat`) has the bomb-drop enable flags at zero
+ * for the opening round, so the only way to die on stage 1 is to be flown into.
+ * That is what makes the first screen the place a new player learns the
+ * formation without being punished for standing still.
+ *
+ * `enemiesFireDuringEntry` remains the narrower rule of the two -- whether a
+ * ship still flying into formation may bomb -- and a stage where nothing bombs
+ * at all necessarily holds fire on the way in as well.
+ */
+export function enemiesBomb(stage) {
+  return stage >= 2 && !isChallengingStage(stage);
+}
+
+/**
+ * The fewest enemies that may be left on screen for a boss to try a beam.
+ *
+ * With the formation nearly cleared the arcade stops attempting captures
+ * entirely. It reads as the survivors going all-out rather than one of them
+ * breaking off to set a trap, and mechanically it stops the end of a stage from
+ * being decided by a capture the player has no formation left to hunt the
+ * captor through.
+ */
+export const CAPTURE_MIN_ENEMIES = 5;
+
+/**
+ * Whether a Boss Galaga may attempt a tractor beam right now.
+ *
+ * Two gates, neither of them a clock. The arcade enables captures per stage
+ * through a flag in the same difficulty table that disarms stage 1, and stops
+ * attempting them once the formation is down to a handful. The scene still runs
+ * a timer to decide *when* to try; this decides whether trying is legal at all.
+ */
+export function captureAllowed(stage, enemiesRemaining) {
+  if (stage < 2 || isChallengingStage(stage)) return false;
+  return enemiesRemaining > CAPTURE_MIN_ENEMIES;
+}
+
+/**
  * Which of the eight Challenging Stage routes this stage flies.
  *
  * The arcade cycles eight distinct preset routes and repeats them after stage
@@ -69,22 +110,59 @@ export function challengingPatternIndex(stage) {
 }
 
 /**
- * Which of the three entrance patterns this stage's wave flies in on.
+ * How many entrance rows the arcade cycles through before repeating.
  *
- * The sourced rule is that the pattern is *fixed per stage*: all five flights
- * of a wave belong to one pattern, and there are three of them. Which stage
- * draws which is the part that could not be sourced, so the cycle here is the
- * simplest assignment that satisfies the rule -- one pattern per stage, in
- * order, repeating every third stage. That gives a player a different entrance
- * on consecutive stages and the same entrance on a stage they have seen
- * before, which is the behaviour the fixedness exists to produce.
+ * The ROM indexes its fly-in data as `d_combat_stg_dat_idx[rank * 17 + row]`:
+ * seventeen rows per difficulty rank, pointing into thirteen distinct caravan
+ * shapes in `d_combat_stg_dat`. Seventeen is the number that matters here,
+ * because it is the period -- it is how long a player plays before an entrance
+ * they have seen comes round again.
+ */
+export const COMBAT_STAGE_ROWS = 17;
+
+/**
+ * The arcade's entrance row for a stage.
  *
- * Every stage has one, including a Challenging Stage, which simply never asks:
- * a bonus round has no formation to assemble.
+ * Reproduces the ROM's index arithmetic: wrap anything past 23 back by four
+ * until it is inside the table, then take `stage - stage/4 - 1`. The `- stage/4`
+ * is what makes this count *combat* stages rather than stages: a challenging
+ * stage has no formation to assemble, does not consume a row, and so stages 2
+ * and 4 are neighbours in this sequence even though 3 sits between them.
+ *
+ * The result is that the seventeen rows are used in order across stages 1-22
+ * (minus the challenging ones), and from stage 24 onward the wrap pins every
+ * later stage onto one of the last three rows.
+ *
+ * A challenging stage never asks -- `launchChallengingStage` does not build a
+ * formation -- so the clamp exists only so that a stray call cannot return an
+ * index off the end of the table.
+ */
+export function combatStageIndex(stage) {
+  let wrapped = stage;
+  while (wrapped > 0x17) wrapped -= 4;
+
+  const row = wrapped - Math.floor(wrapped / 4) - 1;
+  return Math.min(Math.max(row, 0), COMBAT_STAGE_ROWS - 1);
+}
+
+/**
+ * Which entrance pattern this stage's wave flies in on.
+ *
+ * The pattern is fixed for the whole of a stage: all five flights belong to one
+ * of the three shapes in `formation.js`. Which stage draws which follows the
+ * arcade's own row cycle above rather than a plain `stage % 3`, so the *period*
+ * is authentic -- seventeen combat stages, wrapping by four after 23 -- even
+ * though the repo authors three shapes where the ROM stores thirteen.
+ *
+ * Being honest about what is and is not authentic here: that entrances are
+ * fixed per stage, that they repeat on the arcade's schedule, and that no two
+ * consecutive combat stages share one are all real. That the wave arriving on
+ * stage 9 is the *specific* shape the cabinet flies on stage 9 is not claimed;
+ * reproducing that needs all thirteen caravan rows and the rank-indexed table
+ * that selects between them.
  */
 export function entrancePatternFor(stage) {
-  const index = (stage - 1) % ENTRANCE_PATTERN_COUNT;
-  return index < 0 ? index + ENTRANCE_PATTERN_COUNT : index;
+  return combatStageIndex(stage) % ENTRANCE_PATTERN_COUNT;
 }
 
 /**
@@ -144,6 +222,32 @@ export function transformTypeFor(stage) {
   if (stage < 4 || isChallengingStage(stage)) return null;
   return TRANSFORM_CYCLE[Math.floor((stage - 4) / 4) % TRANSFORM_CYCLE.length];
 }
+
+/**
+ * Who flies a Challenging Stage.
+ *
+ * A bonus round is not the attack formation flying a different route: it is
+ * "one type of enemy along with four Boss Galaga" -- Zako in the first, Goei in
+ * the second, alternating from there. That is what makes the eight bonus rounds
+ * distinguishable from one another beyond their choreography, and what makes
+ * the four bosses among them read as the thing worth aiming at.
+ *
+ * Returned in formation-slot order, so the four bosses come first and the
+ * scene's existing five-flights-of-eight split puts them at the head of the
+ * opening wave. Null for a normal stage, which has a real formation instead.
+ */
+export function challengingRoster(stage) {
+  const pattern = challengingPatternIndex(stage);
+  if (pattern === null) return null;
+
+  const rank = pattern % 2 === 0 ? EnemyType.ZAKO : EnemyType.GOEI;
+  return Array.from({ length: FORMATION_SIZE }, (_slot, index) =>
+    index < CHALLENGING_BOSSES ? EnemyType.BOSS : rank,
+  );
+}
+
+/** Boss Galaga in every Challenging Stage, however the rest of it is filled. */
+const CHALLENGING_BOSSES = 4;
 
 /** Flag denominations shown bottom-right, highest first. */
 const FLAG_VALUES = [50, 30, 20, 10, 5, 1];

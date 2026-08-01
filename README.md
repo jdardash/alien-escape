@@ -5,7 +5,7 @@ A Galaga tribute where the game rules live in pure, dependency-free ES modules t
 ## [Play it in your browser](https://jdardash.github.io/alien-escape/)
 
 [![CI](https://img.shields.io/github/actions/workflow/status/jdardash/alien-escape/ci.yml?branch=main&label=CI)](https://github.com/jdardash/alien-escape/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-244%20passing-success)](tests/)
+[![Tests](https://img.shields.io/badge/tests-289%20passing-success)](tests/)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Build step](https://img.shields.io/badge/build%20step-none-lightgrey)](index.html)
 
@@ -39,6 +39,7 @@ src/systems/          PURE. No Phaser import. Fully unit tested.
 src/art/              PURE. Every ship, drawn as a 16 x 16 pixel grid.
   pixelArt.js         the grids and palettes, plus a strict parser
   textures.js         the one seam that turns a grid into a Phaser texture
+  localArt.js         optional local sprite overrides; see docs/local-art.md
 src/entities/         sprite construction helpers
 src/scenes/           Phaser-aware. Thin orchestration.
   TitleScene.js  GameScene.js  GameOverScene.js
@@ -57,19 +58,20 @@ The scenes still do real work, but it is orchestration: create sprites, read inp
 ## Galaga mechanics implemented
 
 - **40-slot formation**: 4 Boss Galaga, 16 Goei, 20 Zako across five rows of a 10-column grid
-- **Three entrance patterns, one fixed per stage**, each flown as five flights of eight. One of the three is the arcade's both-sides entrance, which pairs its arrivals two to a step while the other two stay single file
+- **Entrance patterns fixed per stage**, each flown as five flights of eight, selected on the arcade's own cycle: `combatStageIndex` reproduces the ROM's index arithmetic — seventeen rows, counting combat stages only, wrapping past stage 23 by four. Three shapes are authored where the cabinet stores thirteen, so the *schedule* is authentic and the full shape vocabulary is not. One of the three is the arcade's both-sides entrance, which pairs its arrivals two to a step while the other two stay single file
 - **Formation breathing and sway**: the grid expands and contracts horizontally while drifting, clamped so the outermost column never leaves the screen
-- **Dive attacks**: enemies peel out of formation along curved runs aimed at the player, exit through the bottom, and re-enter from the top back into their slot. Nothing ever fires from inside the formation, and no more than eight enemy shots exist at once
-- **Tractor beam capture**: a Boss Galaga descends into your half of the field, opens a beam, and pulls the fighter in; you lose a life but the ship is held above its captor
+- **Dive attacks**: enemies peel out of formation along curved runs aimed at the player, exit through the bottom, and re-enter from the top back into their slot. Nothing ever fires from inside the formation, no more than eight enemy shots exist at once, and stage 1 does not bomb at all — the arcade's opening difficulty row has its bomb flags at zero, so the first screen can only kill you by flying into you
+- **Tractor beam capture**: a Boss Galaga breaks formation, descends into your half of the field *aiming at your column*, opens a beam, and pulls the fighter in; you lose a life but the ship is held above its captor. Captures are gated the way the arcade gates them — never on stage 1, never during a bonus round, and never once the formation is down to a handful
 - **A captive that fights back**: the held ship bombs you on its captor's dive, and if you shoot that captor while it is still in formation the ship breaks loose, swoops at your column, fires once and is gone for good
 - **Dual fighter rescue**: destroy the captor *while it is diving* and the ship docks, giving a double-width fighter with doubled firepower and a four-bullet limit instead of two. The second ship is a real hitbox, so the upgrade is paid for
-- **Boss Galaga takes two hits**, turning from green to purple on the first
-- **Challenging Stages** on stage 3 and every fourth stage after: eight distinct routes, five waves of eight, no firing and no diving, and clearing all forty pays a perfect bonus
-- **Transform bonus enemies** from stage 4: a Zako pulsates and becomes a trio of Scorpions, Bosconian Spy Ships or Galaxian Flagships, priced per set of three
+- **Boss Galaga takes two hits**, turning from green to blue on the first
+- **Challenging Stages** on stage 3 and every fourth stage after: eight distinct routes, five waves of eight, one rank of enemy plus four Boss Galaga, no firing and no diving, and clearing all forty pays a perfect bonus
+- **Transform bonus enemies** from stage 4: a Zako pulsates and becomes a trio of Scorpions, Bosconian Spy Ships or Galaxian Flagships, worth 160 each and 1,000 to 3,000 more for the completed set. They attack on the way past, which is what the points are for
 - **Authentic scoring**: a target is worth more diving than in formation, and a diving boss is worth more again depending on how many Goei escort it down
 - **Extra lives** at the arcade's factory thresholds (20,000, then 70,000, then every 70,000)
 - **Stage flags** in the greedy largest-first denominations the arcade uses, drawn as flags
 - **The stage counter rolls over**: the stage after 255 is announced as stage 0, exactly as the arcade's single-byte counter does
+- **An attract mode**, not a title screen: the cabinet's own loop of logo, the `-- SCORE --` chart of what every enemy is worth in formation and attacking (including the boss escort tiers), the extra-ship ladder, and the board — over a `CREDIT` line and `PUSH START BUTTON`. Every figure on the chart is read from `scoreFor()` as it is drawn, so it cannot drift from the table it documents
 - **A BEST 5 board with initials entry**: a run that makes the top five is asked for three initials, and the board survives a reload
 - **Hit-miss ratio** reported at game over, which is what makes the two-bullet limit a scored constraint rather than an annoyance
 - **Per-rank audio**: every rank of enemy has its own cry, a boss surviving its first hit sounds different from one dying, and the gun alternates two samples so a burst does not flatten into a tone
@@ -92,7 +94,7 @@ These were found by reading the original `GameScene.js` before rewriting it. The
 
 ```bash
 npm install
-npm test        # vitest run  - 244 tests across 10 files
+npm test        # vitest run  - 289 tests across 10 files
 npm run lint    # eslint .
 ```
 
@@ -157,5 +159,7 @@ The code in this repository is MIT licensed - see [LICENSE](LICENSE).
 Phaser 3, vendored in `lib/`, ships under its own MIT license and its own copyright.
 
 **The ship artwork is original.** Every fighter, enemy, bonus ship and stage flag is a hand-authored pixel grid in [src/art/pixelArt.js](src/art/pixelArt.js), drawn to the published descriptions of each ship rather than traced from the ROM, and generated as a texture at run time. It is MIT along with the rest of the code. The Galaga-derived enemy PNGs this replaced have been deleted from the working tree, though they remain in this repository's git history.
+
+A local checkout can substitute its own sprites through a gitignored `assets/local/` directory — see [docs/local-art.md](docs/local-art.md). Nothing put there can reach this repository, the demo, or a pull request, and the title screen labels any run that is using it.
 
 The **audio** under `assets/sfx/` is Galaga-derived and is used here for a non-commercial tribute; it remains the property of its respective owners and is not covered by this repository's license. The same applies to the remaining loaded images (the starfield, the two projectiles, the explosion and the tractor beam).

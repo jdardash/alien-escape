@@ -58,15 +58,19 @@ import {
   extraLivesEarned,
   PERFECT_BONUS,
   CAPTURED_FIGHTER_POINTS,
-  transformSetPoints,
+  transformKillPoints,
   TRANSFORM_SET_SIZE,
+  CHALLENGING_STAGE_HIT_POINTS,
 } from '../systems/scoring.js';
 import {
   isChallengingStage,
   stageDifficulty,
   stageFlags,
   enemiesFireDuringEntry,
+  enemiesBomb,
+  captureAllowed,
   challengingPatternIndex,
+  challengingRoster,
   transformTypeFor,
   entrancePatternFor,
   nextStage,
@@ -91,6 +95,7 @@ import {
   shipTextureKey,
   FLAG_DRAWN_WIDTH,
 } from '../art/textures.js';
+import { applyShipArt, queueLocalArt } from '../art/localArt.js';
 import { createStats, recordShot, recordHit } from '../systems/stats.js';
 import {
   SOUND_FILES,
@@ -122,6 +127,10 @@ export class GameScene extends Phaser.Scene {
     this.load.image('laser', 'assets/images/enemy_laser.png');
     this.load.image('explosion', 'assets/images/explosion.png');
     this.load.image('tractorBeam', 'assets/images/tractor_beam.png');
+
+    // A local checkout may keep its own ship artwork; see `src/art/localArt.js`.
+    // Absent, this is one 404 and the drawn ships are used.
+    queueLocalArt(this);
 
     // One manifest, in `src/systems/audio.js`, so that the set of sounds that
     // exist and the rules for choosing between them cannot drift apart.
@@ -201,6 +210,7 @@ export class GameScene extends Phaser.Scene {
     this.player = this.physics.add
       .sprite(SCREEN.width / 2, PLAYER.y, shipTextureKey('player'))
       .setCollideWorldBounds(true);
+    applyShipArt(this.player, 'player');
 
     // The same 62% body every enemy gets. The fighter is drawn as a narrow
     // hull inside a 48px frame, and a body filling that frame would have the
@@ -244,6 +254,20 @@ export class GameScene extends Phaser.Scene {
     this.add
       .text(SCREEN.width / 2, 12, 'HIGH SCORE', heading)
       .setOrigin(0.5, 0)
+      .setDepth(20);
+
+    // The right-hand column the cabinet keeps for the second player. This build
+    // is one-player, so it is drawn dim and empty rather than blinking: that is
+    // what a two-player cabinet mid-way through a one-player game looks like,
+    // and it is what gives the blinking 1UP on the left something to mean.
+    this.add
+      .text(SCREEN.width - 20, 12, '2UP', { ...heading, fill: '#663333' })
+      .setOrigin(1, 0)
+      .setDepth(20);
+
+    this.add
+      .text(SCREEN.width - 20, 32, '', { ...value, fill: '#555555' })
+      .setOrigin(1, 0)
       .setDepth(20);
 
     this.scoreText = this.add.text(20, 32, '', value).setDepth(20);
@@ -478,7 +502,15 @@ export class GameScene extends Phaser.Scene {
    */
   launchChallengingStage() {
     const pattern = challengingPatternIndex(this.stage) ?? 0;
-    const slots = buildFormationSlots();
+    // A bonus round is not the attack formation flying a different route: it is
+    // one rank of enemy plus four Boss Galaga. The slots are still the
+    // formation's, because they are what splits forty ships into five flights
+    // of eight, but who sits in them comes from `challengingRoster`.
+    const roster = challengingRoster(this.stage) ?? [];
+    const slots = buildFormationSlots().map((slot, index) => ({
+      ...slot,
+      type: roster[index] ?? slot.type,
+    }));
 
     buildEntryGroups().forEach((group) => {
       const groupDelay = group.index * CHALLENGING.groupIntervalMs;
@@ -507,11 +539,15 @@ export class GameScene extends Phaser.Scene {
       this.sfx.challengeClear.play({ volume: 0.5 });
       this.sfx[challengeResultSound(this.challengingHits, FORMATION_SIZE)].play({ volume: 0.6 });
 
+      // The cabinet's own wording. A round that fell short reports the total
+      // already paid at 100 a hit rather than paying it again here; only the
+      // perfect bonus is awarded at the end, because only it is a bonus.
       if (perfect) {
         this.addScore(PERFECT_BONUS);
-        this.showBanner(`PERFECT\n${PERFECT_BONUS}`, 2200);
+        this.showBanner(`PERFECT!!\nSPECIAL BONUS ${PERFECT_BONUS} PTS`, 2200);
       } else {
-        this.showBanner(`HITS ${this.challengingHits} / ${FORMATION_SIZE}`, 2200);
+        const paid = this.challengingHits * CHALLENGING_STAGE_HIT_POINTS;
+        this.showBanner(`NUMBER OF HITS ${this.challengingHits}\nBONUS ${paid} PTS`, 2200);
       }
     }
 
@@ -610,6 +646,7 @@ export class GameScene extends Phaser.Scene {
         y: origin.y,
       };
       const enemy = createTransformEnemy(this, this.enemies, this.transformType, start, set);
+      enemy.willBomb = enemiesBomb(this.stage) && Math.random() < DIVE.bombChance;
       enemy.flight = createFlight(
         divePath(start, this.player.x, SCREEN),
         TRANSFORM.runDurationMs,
@@ -669,7 +706,7 @@ export class GameScene extends Phaser.Scene {
 
   beginDive(enemy) {
     if (!canBeginDive(enemy)) return;
-    this.sfx.enemyDive.play({ volume: 0.25 });
+    this.beginDiveSound();
     enemy.mode = EnemyMode.DIVING;
     enemy.hasBombed = false;
 
@@ -677,7 +714,10 @@ export class GameScene extends Phaser.Scene {
     // fights: rearm it for this run. See `updateCaptive` for the release.
     if (enemy.captiveAttached && this.captive) this.captive.hasBombed = false;
 
-    enemy.willBomb = Math.random() < DIVE.bombChance;
+    // Stage 1 is unarmed in the arcade: the opening round's difficulty row has
+    // its bomb-drop flags at zero, so the only way to lose a ship on the first
+    // screen is to be flown into.
+    enemy.willBomb = enemiesBomb(this.stage) && Math.random() < DIVE.bombChance;
     enemy.flight = createFlight(
       divePath({ x: enemy.x, y: enemy.y }, this.player.x, SCREEN),
       DIVE.durationMs / this.difficulty.diveSpeed,
@@ -687,6 +727,10 @@ export class GameScene extends Phaser.Scene {
   attemptCapture() {
     if (this.isGameOver || this.challenging || !this.captureIsIdle()) return;
     if (!this.player.active) return;
+    // Two gates the arcade applies and a clock cannot: the stage has to allow
+    // captures at all, and there has to be enough formation left for hunting
+    // the captor down to be a plan the player can act on.
+    if (!captureAllowed(this.stage, this.enemies.countActive(true))) return;
 
     const bosses = this.enemies
       .getChildren()
@@ -701,17 +745,36 @@ export class GameScene extends Phaser.Scene {
     this.captor = boss;
     this.sfx.bossEntrance.play({ volume: 0.5 });
 
-    // Straight down, well past the rest of the formation and into the player's
-    // half of the field, then open the beam. The descent is the tell: it is a
-    // markedly different move from the one-loop dive every other attacker
-    // makes, and it is the player's warning to get out of that column.
+    // Down into the player's half of the field and across toward the player's
+    // column, then open the beam. The descent is the tell: it is a markedly
+    // different move from the one-loop dive every other attacker makes, and it
+    // is the player's warning to get out of the way.
+    //
+    // The sideways travel is capped, so the boss aims once on the way down
+    // rather than tracking. A player who reads the descent and moves can still
+    // slip out from under it.
     this.tweens.add({
       targets: boss,
+      x: this.aimedBeamX(boss),
       y: CAPTURE.descendToY,
       duration: CAPTURE.descendDurationMs,
       ease: 'Sine.easeInOut',
       onComplete: () => this.openBeam(boss),
     });
+  }
+
+  /**
+   * Where a descending boss lines its beam up: the player's column, as far as
+   * it can reach, and never so far out that the beam hangs off the screen.
+   */
+  aimedBeamX(boss) {
+    const reach = Phaser.Math.Clamp(
+      this.player.x - boss.x,
+      -CAPTURE.aimTravelPx,
+      CAPTURE.aimTravelPx,
+    );
+    const half = CAPTURE.beamWidth / 2;
+    return Phaser.Math.Clamp(boss.x + reach, half, SCREEN.width - half);
   }
 
   openBeam(boss) {
@@ -818,6 +881,7 @@ export class GameScene extends Phaser.Scene {
       this.captive = this.captives
         .create(boss.x, boss.y + CAPTURE.captiveOffsetY, shipTextureKey('captive'))
         .setDepth(6);
+      applyShipArt(this.captive, 'captive');
       this.captive.body.setAllowGravity(false);
       boss.captiveAttached = true;
 
@@ -935,6 +999,7 @@ export class GameScene extends Phaser.Scene {
     this.dualFighter = this.wingman
       .create(this.player.x + DUAL_FIGHTER_OFFSET_X, this.player.y, shipTextureKey('player'))
       .setDepth(4);
+    applyShipArt(this.dualFighter, 'player');
     this.dualFighter.body.setSize(
       this.dualFighter.width * 0.62,
       this.dualFighter.height * 0.62,
@@ -954,18 +1019,19 @@ export class GameScene extends Phaser.Scene {
 
     this.stats = recordHit(this.stats);
 
-    // A transform bonus ship is priced by the set, not individually, so the
-    // kill is counted against the shared set and only the third one pays.
+    // A transform bonus ship pays for itself and, on the third kill, for the
+    // set. `transformKillPoints` takes the count still alive including this
+    // one, so the scene never has to know which kill completes a trio.
     if (enemy.transformSet) {
       const set = enemy.transformSet;
+      const points = transformKillPoints(set.type, set.remaining);
       set.remaining -= 1;
       this.destroyEnemy(enemy, true);
 
-      if (set.remaining === 0) {
-        const points = transformSetPoints(set.type);
-        this.addScore(points);
-        this.showBanner(String(points), 1100);
-      }
+      this.addScore(points);
+      // Only the set bonus is worth interrupting the screen for; 160 on its own
+      // is an ordinary kill and belongs in the score, not in a banner.
+      if (set.remaining === 0) this.showBanner(String(points), 1100);
       return;
     }
 
@@ -1167,8 +1233,11 @@ export class GameScene extends Phaser.Scene {
   endGame() {
     this.isGameOver = true;
     this.clearTimers();
-    // The board goes quiet before the results screen speaks.
+    // The board goes quiet before the results screen speaks. The attack-run
+    // loop is stopped by hand because `updateDiveSound` no longer runs once the
+    // game is over, and a held loop would play under the whole results screen.
     this.sfx.ambient.stop();
+    this.sfx.enemyDive.stop();
 
     this.time.delayedCall(1200, () => {
       // The score is banked by the results screen, not here: it is the screen
@@ -1194,6 +1263,7 @@ export class GameScene extends Phaser.Scene {
     this.formationElapsed += delta;
 
     this.updateFormation(delta);
+    this.updateDiveSound();
     this.updatePlayer();
     this.updateCaptive(delta);
     this.updateBeam(delta);
@@ -1235,7 +1305,16 @@ export class GameScene extends Phaser.Scene {
     // Bomb at a fixed point of the run rather than on a per-frame roll, so an
     // attacker always releases at the same moment regardless of frame rate.
     // Whether it bombs at all is decided once, when the run begins.
-    const bombing = enemy.mode === EnemyMode.DIVING || enemy.mode === EnemyMode.ENTERING;
+    //
+    // A transform bonus ship flies `PASSING` because it never joins a
+    // formation, but it is making an attack run, not a fly-past: the trio is
+    // the highest-value target on the board and an unarmed one would be a free
+    // 1,480 points. Challenging-stage enemies are `PASSING` too and are the
+    // genuinely harmless case; they never have `willBomb` set.
+    const bombing =
+      enemy.mode === EnemyMode.DIVING ||
+      enemy.mode === EnemyMode.ENTERING ||
+      enemy.transformSet !== undefined;
     if (bombing && !enemy.hasBombed && flightProgress(enemy.flight) >= DIVE.bombAtProgress) {
       enemy.hasBombed = true;
       if (enemy.willBomb) this.fireEnemyBullet(enemy);
@@ -1266,6 +1345,28 @@ export class GameScene extends Phaser.Scene {
       default:
         enemy.flight = null;
     }
+  }
+
+  /**
+   * The attack-run sound, held for as long as anything is attacking.
+   *
+   * In the arcade this runs for the duration of a dive rather than being a
+   * one-shot at the moment of launch, which is what makes a screen with four
+   * attackers in the air sound different from one with a single Zako on its
+   * way down. Started when the first attacker leaves the grid and stopped by
+   * `updateFormation` once the sky is clear again, so overlapping dives share
+   * one voice instead of stacking a copy per diver.
+   */
+  beginDiveSound() {
+    if (this.sfx.enemyDive.isPlaying) return;
+    this.sfx.enemyDive.play({ volume: 0.25, loop: true });
+  }
+
+  /** Stop the attack-run loop once nothing is flying at the player. */
+  updateDiveSound() {
+    if (!this.sfx.enemyDive.isPlaying) return;
+    const attacking = this.enemies.getChildren().some((enemy) => enemy.active && isDiving(enemy));
+    if (!attacking) this.sfx.enemyDive.stop();
   }
 
   fireEnemyBullet(enemy) {
@@ -1443,16 +1544,16 @@ export class GameScene extends Phaser.Scene {
     const shown = Math.min(Math.max(this.lives - 1, 0), LIFE_ICONS_SHOWN);
 
     for (let i = 0; i < shown; i += 1) {
-      this.lifeIcons.push(
-        this.add
-          .image(
-            16 + i * 36,
-            SCREEN.height - 14,
-            shipTextureKey('player', SHIP_ART.lifeIconPixelSize),
-          )
-          .setOrigin(0, 1)
-          .setDepth(20),
-      );
+      const icon = this.add
+        .image(
+          16 + i * 36,
+          SCREEN.height - 14,
+          shipTextureKey('player', SHIP_ART.lifeIconPixelSize),
+        )
+        .setOrigin(0, 1)
+        .setDepth(20);
+
+      this.lifeIcons.push(applyShipArt(icon, 'player', SHIP_ART.lifeIconPixelSize));
     }
   }
 

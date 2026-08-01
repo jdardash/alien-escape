@@ -166,6 +166,20 @@ export const CAPTURE = {
   attemptIntervalMs: 12000,
   descendDurationMs: 2200,
   /**
+   * How far a descending boss may slide sideways to line its beam up.
+   *
+   * The arcade's capture dive carries an aim token that reads the player's X
+   * and clamps it to a lane, so the boss comes down *where the player is*
+   * rather than straight down its own column. Without that the beam opens over
+   * empty screen and the signature mechanic can be ignored by standing
+   * somewhere else, which is what an earlier revision did.
+   *
+   * Clamped rather than exact, so the aim is a commitment made on the way down
+   * and not a tracking beam: a player who moves while the boss descends can
+   * still get out from under it, which is the skill the mechanic is testing.
+   */
+  aimTravelPx: 190,
+  /**
    * How far down a boss comes to open its beam.
    *
    * The arcade boss "peels off and dives straight down... stops two inches
@@ -180,10 +194,30 @@ export const CAPTURE = {
    * about: 200px is roughly a second and a half of dodging time.
    */
   descendToY: PLAYER.y - 200,
-  beamOpenMs: 700,
-  beamHoldMs: 2600,
-  /** Width of the column that catches the player. */
-  beamWidth: 76,
+  /**
+   * How long the beam takes to fan out, and how long it stays out.
+   *
+   * The arcade grows the beam over about eleven strips at six frames each and
+   * then holds it for a hardcoded 64 frames, which is roughly 1.1 seconds
+   * opening and 1.05 held at 60.606 Hz. This is a little more generous than
+   * that on the hold, because a browser player has no muscle memory for the
+   * timing and the beam here has further to reach, but it is no longer the 2.6
+   * seconds an earlier revision held it for -- at that length the beam stopped
+   * being a moment and became a state of the board.
+   */
+  beamOpenMs: 1100,
+  beamHoldMs: 1400,
+  /**
+   * Width of the column that catches the player.
+   *
+   * The arcade tests roughly +/-27 pixels around the beam's centre on a
+   * 224-wide field. This screen is exactly three times that, so the same test
+   * is +/-81 here, and the beam is that wide. An earlier revision used 76 --
+   * less than half the arcade's catchment -- which, together with a boss that
+   * did not aim, made the capture something a player could sit out rather than
+   * something they had to fly out of.
+   */
+  beamWidth: 162,
   /**
    * How far the beam reaches below its boss.
    *

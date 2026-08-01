@@ -53,6 +53,55 @@ describe('parsePixelArt', () => {
   });
 });
 
+/** The colour covering the most cells of a sprite: what it reads as at a glance. */
+function dominantColour(art) {
+  const counts = new Map();
+  for (const pixel of art.pixels) counts.set(pixel.color, (counts.get(pixel.color) ?? 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+}
+
+const channels = (colour) => ({
+  r: (colour >> 16) & 0xff,
+  g: (colour >> 8) & 0xff,
+  b: colour & 0xff,
+});
+
+describe('ship colour states', () => {
+  const dominant = (name) =>
+    channels(dominantColour(parsePixelArt(SHIP_SPRITES[name].rows, SHIP_SPRITES[name].palette)));
+
+  it('reads a healthy Boss Galaga as green', () => {
+    const { r, g, b } = dominant('boss');
+    expect(g).toBeGreaterThan(r);
+    expect(g).toBeGreaterThan(b);
+  });
+
+  // Blue specifically, not merely blue-dominant: purple is blue-dominant too,
+  // and purple is what this used to be. Keeping the red channel well clear of
+  // the blue one is the difference between the two.
+  it('reads a damaged Boss Galaga as blue rather than purple', () => {
+    const { r, g, b } = dominant('bossDamaged');
+    expect(b).toBeGreaterThan(g);
+    expect(b - r).toBeGreaterThan(80);
+  });
+
+  it('keeps the damaged boss distinct from a Zako, which is also blue', () => {
+    const boss = parsePixelArt(SHIP_SPRITES.bossDamaged.rows, SHIP_SPRITES.bossDamaged.palette);
+    const zako = parsePixelArt(SHIP_SPRITES.zako.rows, SHIP_SPRITES.zako.palette);
+    expect(dominantColour(boss)).not.toBe(dominantColour(zako));
+  });
+
+  it('reads a captured fighter as red', () => {
+    const { r, g, b } = dominant('captive');
+    expect(r).toBeGreaterThan(g);
+    expect(r).toBeGreaterThan(b);
+  });
+
+  it('does not read the player the same way it reads the captive', () => {
+    expect(dominant('player')).not.toEqual(dominant('captive'));
+  });
+});
+
 describe('ship artwork', () => {
   const drawn = Object.fromEntries(
     Object.entries(SHIP_SPRITES).map(([name, sprite]) => [

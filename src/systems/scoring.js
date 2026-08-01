@@ -34,10 +34,23 @@ const DIVING_BOSS_VALUES = [400, 800, 1600];
 export const CAPTURED_FIGHTER_POINTS = 1000;
 
 /**
- * A transform bonus arrives as a trio, and the arcade prices the trio rather
- * than the individual ships.
+ * A transform bonus arrives as a trio, and the arcade prices the trio as well
+ * as the ships in it.
  */
 export const TRANSFORM_SET_SIZE = 3;
+
+/**
+ * Points for one transform bonus ship, on its own.
+ *
+ * Paid on every kill, and the set bonus below is paid *on top of* the third.
+ * An earlier revision paid nothing until the trio was complete, on the reading
+ * that the sources only ever quote a per-set figure; a per-ship figure of 160
+ * has since been found alongside the set values, so a partial set is worth
+ * something after all. It is still worth chasing all three -- 480 against
+ * 1,480 for a Scorpion trio -- which is the decision the mechanic exists to
+ * pose.
+ */
+export const TRANSFORM_SHIP_POINTS = 160;
 
 const TRANSFORM_SET_VALUES = {
   [TransformType.SCORPION]: 1000,
@@ -59,6 +72,19 @@ export function transformSetPoints(type) {
   const value = TRANSFORM_SET_VALUES[type];
   if (value === undefined) throw new Error(`Unknown transform type: ${type}`);
   return value;
+}
+
+/**
+ * Points for shooting one ship of a transform trio.
+ *
+ * `remaining` is how many of the set were still alive *including* this one, so
+ * the last one to die arrives here as 1 and is the kill that collects the set
+ * bonus. Taking the count rather than a boolean keeps the caller from having to
+ * know which kill completes a set.
+ */
+export function transformKillPoints(type, remaining) {
+  const setBonus = remaining <= 1 ? transformSetPoints(type) : 0;
+  return TRANSFORM_SHIP_POINTS + setBonus;
 }
 
 /** Every hit during a Challenging Stage is worth a flat 100. */

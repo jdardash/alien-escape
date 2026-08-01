@@ -20,9 +20,9 @@
  *
  * Nothing here is traced from the original ROM. The silhouettes follow the
  * published descriptions of each ship: a blue-and-yellow bee, a red butterfly
- * with blue wings, a green Boss Galaga that turns purple on its first hit, a
+ * with blue wings, a green Boss Galaga that turns blue on its first hit, a
  * yellow scorpion, a green Bosconian station, a blue Galaxian flagship with
- * red wingtips.
+ * red wingtips, and a captured fighter that goes red.
  */
 
 import { FLAG_ART } from '../config.js';
@@ -171,9 +171,18 @@ const BOSS = {
   palette: { g: 0x3cdc50, k: 0x0e5a20, w: 0xd8ffe0, e: 0x0c2a12 },
 };
 
+/**
+ * The same boss, once it has taken the first of its two hits.
+ *
+ * Blue, not the purple this used to be. The two were a coin toss between
+ * sources that disagreed, until a ROM-level account settled it: "the first hit
+ * changes the boss's palette from green to blue". Deep enough in the blue to be
+ * unmistakable against the Zako's lighter cyan, which is the one confusion the
+ * change could cause.
+ */
 const BOSS_DAMAGED = {
   rows: BOSS_ROWS,
-  palette: { g: 0xc060f0, k: 0x4a1080, w: 0xf0d8ff, e: 0x1c0830 },
+  palette: { g: 0x3c78f0, k: 0x102a78, w: 0xd8e4ff, e: 0x0a1230 },
 };
 
 /**
@@ -214,15 +223,19 @@ const PLAYER_SHIP = {
  *
  * The arcade draws the captured ship recognisably as your own, which is the
  * point of the mechanic: the thing hanging under that boss is the life you
- * just lost. Here it keeps the silhouette exactly and loses the palette -- grey
- * hull, violet wings, dead engines -- because the player has a real decision to
- * make about it (shoot it for 1,000 and lose it, or hunt the captor for the
- * dual fighter) and needs to be able to tell it apart from the ship they are
- * flying at a glance.
+ * just lost. It keeps the silhouette exactly and changes colour, which is what
+ * lets the player tell it apart at a glance from the ship they are still flying
+ * -- and they need to, because there is a real decision to make about it: shoot
+ * it for 1,000 and lose it, or hunt the captor down for the dual fighter.
+ *
+ * Red, on the ROM's own account: on capture the fighter "recolors to red
+ * (sprite code 7)" and holds that colour for as long as a boss has it. An
+ * earlier revision drew it drained -- grey hull, violet wings -- which read
+ * well and was not what the cabinet does.
  */
 const CAPTIVE_SHIP = {
   rows: PLAYER_ROWS,
-  palette: { w: 0x9098a8, r: 0x8058c0, b: 0x5a6478, k: 0x3a3a48 },
+  palette: { w: 0xf04038, r: 0x9c1810, b: 0xff8878, k: 0x701008 },
 };
 
 /**

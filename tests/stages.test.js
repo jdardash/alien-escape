@@ -10,9 +10,16 @@ import {
   TransformType,
   entrancePatternFor,
   ENTRANCE_PATTERN_COUNT,
+  combatStageIndex,
+  COMBAT_STAGE_ROWS,
+  enemiesBomb,
+  captureAllowed,
+  CAPTURE_MIN_ENEMIES,
+  challengingRoster,
   nextStage,
   STAGE_ROLLOVER,
 } from '../src/systems/stages.js';
+import { EnemyType } from '../src/systems/formation.js';
 
 describe('challenging stage cadence', () => {
   it('lands on stage 3 and every fourth stage after it', () => {
@@ -153,10 +160,125 @@ describe('entrance patterns', () => {
     expect(seen.size).toBe(ENTRANCE_PATTERN_COUNT);
   });
 
-  it('changes pattern from one stage to the next', () => {
+  // Consecutive *combat* stages, not consecutive stage numbers: the arcade's
+  // row index counts combat stages only, so a challenging stage does not
+  // advance it and stages 2 and 4 are the neighbouring pair, not 3 and 4.
+  it('changes pattern from one combat stage to the next', () => {
+    const combat = [];
     for (let stage = 1; stage <= 40; stage += 1) {
-      expect(entrancePatternFor(stage)).not.toBe(entrancePatternFor(stage + 1));
+      if (!isChallengingStage(stage)) combat.push(entrancePatternFor(stage));
     }
+    for (let i = 1; i < combat.length; i += 1) {
+      expect(combat[i]).not.toBe(combat[i - 1]);
+    }
+  });
+});
+
+describe('the arcade entrance-row cycle', () => {
+  it('gives stage 1 the first row', () => {
+    expect(combatStageIndex(1)).toBe(0);
+  });
+
+  it('numbers combat stages consecutively, skipping challenging stages', () => {
+    expect([1, 2, 4, 5, 6, 8, 9, 10].map(combatStageIndex)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  it('uses every one of the seventeen rows before repeating', () => {
+    const rows = [];
+    for (let stage = 1; stage <= 23; stage += 1) {
+      if (!isChallengingStage(stage)) rows.push(combatStageIndex(stage));
+    }
+    expect(rows).toEqual([...Array(COMBAT_STAGE_ROWS).keys()]);
+  });
+
+  it('wraps stages past 23 back by four, as the arcade does', () => {
+    expect(combatStageIndex(24)).toBe(combatStageIndex(20));
+    expect(combatStageIndex(25)).toBe(combatStageIndex(21));
+    expect(combatStageIndex(26)).toBe(combatStageIndex(22));
+    expect(combatStageIndex(28)).toBe(combatStageIndex(20));
+  });
+
+  it('stays inside the table for every stage number, rollover included', () => {
+    for (let stage = 0; stage <= STAGE_ROLLOVER; stage += 1) {
+      const row = combatStageIndex(stage);
+      expect(Number.isInteger(row)).toBe(true);
+      expect(row).toBeGreaterThanOrEqual(0);
+      expect(row).toBeLessThan(COMBAT_STAGE_ROWS);
+    }
+  });
+});
+
+describe('enemy bombing', () => {
+  it('holds fire completely through the opening stage', () => {
+    expect(enemiesBomb(1)).toBe(false);
+  });
+
+  it('opens up from stage 2', () => {
+    expect(enemiesBomb(2)).toBe(true);
+    expect(enemiesBomb(4)).toBe(true);
+  });
+
+  it('never bombs during a challenging stage', () => {
+    for (const stage of [3, 7, 11, 15]) expect(enemiesBomb(stage)).toBe(false);
+  });
+
+  it('is a superset of firing on the way in', () => {
+    for (let stage = 1; stage <= 40; stage += 1) {
+      if (enemiesFireDuringEntry(stage)) expect(enemiesBomb(stage)).toBe(true);
+    }
+  });
+});
+
+describe('capture gating', () => {
+  it('never deploys a beam during the opening stage', () => {
+    expect(captureAllowed(1, 40)).toBe(false);
+  });
+
+  it('allows a beam from stage 2 with a full formation', () => {
+    expect(captureAllowed(2, 40)).toBe(true);
+  });
+
+  it('never deploys a beam during a challenging stage', () => {
+    expect(captureAllowed(7, 40)).toBe(false);
+  });
+
+  it('stops trying once the formation is nearly cleared', () => {
+    expect(captureAllowed(5, CAPTURE_MIN_ENEMIES)).toBe(false);
+    expect(captureAllowed(5, 2)).toBe(false);
+    expect(captureAllowed(5, CAPTURE_MIN_ENEMIES + 1)).toBe(true);
+  });
+});
+
+describe('challenging stage roster', () => {
+  it('has no roster for a normal stage', () => {
+    expect(challengingRoster(2)).toBeNull();
+  });
+
+  it('brings forty enemies', () => {
+    expect(challengingRoster(3)).toHaveLength(40);
+  });
+
+  it('brings exactly four Boss Galaga', () => {
+    for (const stage of [3, 7, 11, 15, 19]) {
+      const bosses = challengingRoster(stage).filter((type) => type === EnemyType.BOSS);
+      expect(bosses).toHaveLength(4);
+    }
+  });
+
+  it('fills the rest of the wave with a single rank', () => {
+    for (const stage of [3, 7, 11, 15, 19, 23, 27, 31]) {
+      const ranks = new Set(challengingRoster(stage).filter((type) => type !== EnemyType.BOSS));
+      expect(ranks.size).toBe(1);
+    }
+  });
+
+  it('flies Zako in the first bonus round and Goei in the second', () => {
+    expect(challengingRoster(3).at(-1)).toBe(EnemyType.ZAKO);
+    expect(challengingRoster(7).at(-1)).toBe(EnemyType.GOEI);
+  });
+
+  it('puts the bosses at the front, where the formation keeps them', () => {
+    expect(challengingRoster(3).slice(0, 4)).toEqual(Array(4).fill(EnemyType.BOSS));
   });
 });
 

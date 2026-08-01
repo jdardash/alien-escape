@@ -8,7 +8,9 @@ import {
   EXTRA_LIFE_INTERVAL,
   CHALLENGING_STAGE_HIT_POINTS,
   transformSetPoints,
+  transformKillPoints,
   TRANSFORM_SET_SIZE,
+  TRANSFORM_SHIP_POINTS,
 } from '../src/systems/scoring.js';
 import { TransformType } from '../src/systems/stages.js';
 
@@ -21,6 +23,29 @@ describe('transform bonus sets', () => {
 
   it('is scored per set of three, not per enemy', () => {
     expect(TRANSFORM_SET_SIZE).toBe(3);
+  });
+
+  it('pays for each ship as well as for the completed set', () => {
+    expect(TRANSFORM_SHIP_POINTS).toBe(160);
+  });
+
+  it('pays the ship value alone until the set is finished', () => {
+    expect(transformKillPoints(TransformType.SCORPION, 3)).toBe(160);
+    expect(transformKillPoints(TransformType.SCORPION, 2)).toBe(160);
+  });
+
+  it('adds the set bonus to the third kill', () => {
+    expect(transformKillPoints(TransformType.SCORPION, 1)).toBe(160 + 1000);
+    expect(transformKillPoints(TransformType.SPY_SHIP, 1)).toBe(160 + 2000);
+    expect(transformKillPoints(TransformType.FLAGSHIP, 1)).toBe(160 + 3000);
+  });
+
+  it('pays a full set of Scorpions the arcade total', () => {
+    const total = [3, 2, 1].reduce(
+      (sum, remaining) => sum + transformKillPoints(TransformType.SCORPION, remaining),
+      0,
+    );
+    expect(total).toBe(160 * 3 + 1000);
   });
 
   it('rejects an unknown transform type instead of scoring NaN', () => {

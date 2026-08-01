@@ -9,6 +9,7 @@
 import { BOSS_SPRITE, ENEMY_HEALTH } from '../config.js';
 import { EnemyType } from '../systems/formation.js';
 import { shipTextureKey, transformTextureKey } from '../art/textures.js';
+import { applyShipArt } from '../art/localArt.js';
 
 /** Enemies are either sitting in formation, flying a path, or gone. */
 export const EnemyMode = {
@@ -32,6 +33,9 @@ export function createEnemy(scene, group, slot, position) {
   const sprite = slot.type === EnemyType.BOSS ? BOSS_SPRITE.healthy : slot.type;
 
   const enemy = group.create(position.x, position.y, shipTextureKey(sprite)).setOrigin(0.5);
+  // Before the body is sized: a local override may be a different texture at a
+  // different source size, and the body is measured off whichever one wins.
+  applyShipArt(enemy, sprite);
 
   enemy.body.setSize(enemy.width * 0.62, enemy.height * 0.62, true);
   enemy.body.setAllowGravity(false);
@@ -54,7 +58,7 @@ export function createEnemy(scene, group, slot, position) {
  * and the change reads as damage rather than as a different enemy.
  */
 export function showBossDamage(enemy) {
-  enemy.setTexture(shipTextureKey(BOSS_SPRITE.damaged));
+  applyShipArt(enemy, BOSS_SPRITE.damaged);
 }
 
 /** True when a target is outside formation and therefore worth more. */

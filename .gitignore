@@ -7,3 +7,8 @@ coverage/
 CLAUDE.md
 docs/superpowers/
 .playwright-mcp/
+
+# Local arcade artwork. The repository ships original pixel art; a local
+# checkout may drop the cabinet's own sprites in here instead. They are Bandai
+# Namco's and must never be committed. See docs/local-art.md.
+assets/local/
