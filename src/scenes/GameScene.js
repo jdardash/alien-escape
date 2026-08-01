@@ -20,8 +20,11 @@ import {
   DIVE,
   DUAL_FIGHTER_OFFSET_X,
   FORMATION,
+  LIFE_ICONS_SHOWN,
   PLAYER,
   SCREEN,
+  SHIP_ART,
+  SHIP_DRAWN_PX,
   SPRITE_SCALE,
   CHALLENGING,
   TRANSFORM,
@@ -66,6 +69,7 @@ import {
   challengingPatternIndex,
   transformTypeFor,
   entrancePatternFor,
+  nextStage,
 } from '../systems/stages.js';
 import {
   CaptureState,
@@ -78,15 +82,22 @@ import {
   bulletLimit,
   captiveCanBomb,
 } from '../systems/capture.js';
-import { resolveStorage, loadHighScore, saveHighScore } from '../systems/persistence.js';
+import { resolveStorage, loadScoreTable } from '../systems/persistence.js';
 import {
   createFlagTextures,
+  createShipTextures,
   createTransformTextures,
   flagTextureKey,
+  shipTextureKey,
   FLAG_DRAWN_WIDTH,
 } from '../art/textures.js';
 import { createStats, recordShot, recordHit } from '../systems/stats.js';
-import { SOUND_FILES, deathSoundFor, playerShotSound } from '../systems/audio.js';
+import {
+  SOUND_FILES,
+  challengeResultSound,
+  deathSoundFor,
+  playerShotSound,
+} from '../systems/audio.js';
 import {
   EnemyMode,
   createEnemy,
@@ -103,14 +114,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   preload() {
-    this.load.image('capturedShip', 'assets/images/capturedShip.png');
+    // Only the starfield, the projectiles and the two effects are loaded. Every
+    // ship in the game is generated from the pixel grids in `src/art`; see
+    // `createShipTextures`.
     this.load.image('background', 'assets/images/background_tiled_vertical.png');
-    this.load.image('player', 'assets/images/mainship.png');
     this.load.image('bullet', 'assets/images/player_laser.png');
     this.load.image('laser', 'assets/images/enemy_laser.png');
-    this.load.image('enemyBee', 'assets/images/galaga_enemy_bee.png');
-    this.load.image('enemyBossRed', 'assets/images/galaga_enemy_boss_red.png');
-    this.load.image('enemyBossPurple', 'assets/images/galaga_enemy_boss_purple.png');
     this.load.image('explosion', 'assets/images/explosion.png');
     this.load.image('tractorBeam', 'assets/images/tractor_beam.png');
 
@@ -125,9 +134,16 @@ export class GameScene extends Phaser.Scene {
     this.storage = resolveStorage(globalThis.localStorage);
 
     this.score = 0;
-    this.highScore = loadHighScore(this.storage);
+    // The number in the HUD is the top of the board, not a second high score
+    // kept beside it. A cabinet whose header disagreed with its own BEST 5
+    // would be showing one of the two wrong.
+    this.highScore = loadScoreTable(this.storage)[0].score;
     this.lives = PLAYER.startingLives;
     this.stage = 1;
+    // Stages *played*, which is not the same as the stage number once the
+    // counter has rolled over past 255. Difficulty is driven from this so a
+    // player who gets that far is not handed the opening round back.
+    this.round = 1;
     this.stats = createStats();
     this.captureState = CaptureState.IDLE;
     this.shotIndex = 0;
@@ -140,8 +156,10 @@ export class GameScene extends Phaser.Scene {
     this.currentBreath = 1;
     this.currentSway = 0;
 
-    // Generated rather than loaded: the transform bonus ships are pixel art
-    // authored in `src/art`, so their textures are built once here.
+    // Generated rather than loaded: every ship in the game is pixel art
+    // authored in `src/art`, so the textures are built once here, before
+    // anything asks for one.
+    createShipTextures(this);
     createTransformTextures(this);
 
     this.createWorld();
@@ -181,10 +199,13 @@ export class GameScene extends Phaser.Scene {
 
   createPlayer() {
     this.player = this.physics.add
-      .sprite(SCREEN.width / 2, PLAYER.y, 'player')
-      .setScale(PLAYER.scale)
+      .sprite(SCREEN.width / 2, PLAYER.y, shipTextureKey('player'))
       .setCollideWorldBounds(true);
 
+    // The same 62% body every enemy gets. The fighter is drawn as a narrow
+    // hull inside a 48px frame, and a body filling that frame would have the
+    // player shot down by bombs passing through empty space beside the wings.
+    this.player.body.setSize(this.player.width * 0.62, this.player.height * 0.62, true);
     this.player.body.setAllowGravity(false);
     this.dualFighter = null;
   }
@@ -205,12 +226,29 @@ export class GameScene extends Phaser.Scene {
     this.captives = this.physics.add.group();
   }
 
+  /**
+   * The cabinet's own header: a blinking 1UP over the running score on the
+   * left, HIGH SCORE over the board's best in the middle.
+   *
+   * The blink is not decoration. On a two-player cabinet it marks whose turn is
+   * live, and it is the one piece of motion in an otherwise static header, so a
+   * screen with nothing flying on it still reads as a machine that is on.
+   */
   createHud() {
-    const label = { font: '18px monospace', fill: '#ffffff' };
+    const heading = { font: '15px monospace', fill: '#ff4444' };
+    const value = { font: '18px monospace', fill: '#ffffff' };
 
-    this.scoreText = this.add.text(20, 16, '', label).setDepth(20);
+    const oneUp = this.add.text(20, 12, '1UP', heading).setDepth(20);
+    this.tweens.add({ targets: oneUp, alpha: 0.15, duration: 500, yoyo: true, repeat: -1 });
+
+    this.add
+      .text(SCREEN.width / 2, 12, 'HIGH SCORE', heading)
+      .setOrigin(0.5, 0)
+      .setDepth(20);
+
+    this.scoreText = this.add.text(20, 32, '', value).setDepth(20);
     this.highScoreText = this.add
-      .text(SCREEN.width / 2, 16, '', { ...label, fill: '#ffcc00' })
+      .text(SCREEN.width / 2, 32, '', { ...value, fill: '#ffcc00' })
       .setOrigin(0.5, 0)
       .setDepth(20);
 
@@ -236,7 +274,15 @@ export class GameScene extends Phaser.Scene {
       right: 'D',
       altLeft: 'LEFT',
       altRight: 'RIGHT',
-      fire: 'SPACE',
+    });
+
+    // Movement is a held state and is read per frame; firing is an event.
+    // Polling `JustDown` for the trigger loses any press that begins and ends
+    // inside one frame, and tapping faster than the refresh rate is exactly
+    // what a two-shot limit teaches a player to do. The `repeat` guard is what
+    // stops a held key turning into the operating system's key-repeat rate.
+    this.input.keyboard.on('keydown-SPACE', (event) => {
+      if (!event.repeat) this.fire();
     });
   }
 
@@ -311,7 +357,7 @@ export class GameScene extends Phaser.Scene {
     this.stageResolving = false;
     this.formationElapsed = 0;
     this.challengingHits = 0;
-    this.difficulty = stageDifficulty(stage);
+    this.difficulty = stageDifficulty(this.round);
     this.challenging = isChallengingStage(stage);
     this.transformType = transformTypeFor(stage);
 
@@ -459,8 +505,9 @@ export class GameScene extends Phaser.Scene {
     if (this.challenging) {
       const perfect = this.challengingHits === FORMATION_SIZE;
       this.sfx.challengeClear.play({ volume: 0.5 });
+      this.sfx[challengeResultSound(this.challengingHits, FORMATION_SIZE)].play({ volume: 0.6 });
+
       if (perfect) {
-        this.sfx.challengePerfect.play({ volume: 0.6 });
         this.addScore(PERFECT_BONUS);
         this.showBanner(`PERFECT\n${PERFECT_BONUS}`, 2200);
       } else {
@@ -471,7 +518,8 @@ export class GameScene extends Phaser.Scene {
     this.stageAdvanceTimer = this.time.delayedCall(this.challenging ? 2400 : 1200, () => {
       this.stageAdvanceTimer = null;
       if (this.isGameOver) return;
-      this.stage += 1;
+      this.round += 1;
+      this.stage = nextStage(this.stage);
       this.beginStage(this.stage);
     });
   }
@@ -528,7 +576,9 @@ export class GameScene extends Phaser.Scene {
     // has already been shot: `onComplete` re-checks that it is still alive.
     this.tweens.add({
       targets: chosen,
-      scale: SPRITE_SCALE.enemy * 1.35,
+      // The ship textures are drawn at scale 1, so the warning pulse is a
+      // straight 35% swell rather than a multiple of an authoring scale.
+      scale: 1.35,
       duration: TRANSFORM.pulseDurationMs,
       yoyo: true,
       repeat: TRANSFORM.pulseRepeats,
@@ -766,8 +816,7 @@ export class GameScene extends Phaser.Scene {
     const boss = this.captor;
     if (boss && boss.active) {
       this.captive = this.captives
-        .create(boss.x, boss.y + CAPTURE.captiveOffsetY, 'capturedShip')
-        .setScale(PLAYER.scale)
+        .create(boss.x, boss.y + CAPTURE.captiveOffsetY, shipTextureKey('captive'))
         .setDepth(6);
       this.captive.body.setAllowGravity(false);
       boss.captiveAttached = true;
@@ -884,9 +933,13 @@ export class GameScene extends Phaser.Scene {
     // firepower for twice the width to be hit across is the whole trade; an
     // image with no body would have made the upgrade free.
     this.dualFighter = this.wingman
-      .create(this.player.x + DUAL_FIGHTER_OFFSET_X, this.player.y, 'player')
-      .setScale(PLAYER.scale)
+      .create(this.player.x + DUAL_FIGHTER_OFFSET_X, this.player.y, shipTextureKey('player'))
       .setDepth(4);
+    this.dualFighter.body.setSize(
+      this.dualFighter.width * 0.62,
+      this.dualFighter.height * 0.62,
+      true,
+    );
     this.dualFighter.body.setAllowGravity(false);
     this.dualFighter.body.setImmovable(true);
 
@@ -1118,14 +1171,14 @@ export class GameScene extends Phaser.Scene {
     this.sfx.ambient.stop();
 
     this.time.delayedCall(1200, () => {
-      // Saved here rather than the moment the last life goes: bullets already
-      // in the air still land during the pause, and banking the score early
-      // left the results screen showing a score above its own high score.
-      this.highScore = saveHighScore(this.storage, this.score);
-
+      // The score is banked by the results screen, not here: it is the screen
+      // that asks for initials, and a run that made the board has to be written
+      // once, with the name attached, rather than saved twice. The pause is
+      // what it always was -- bullets already in the air still land during it,
+      // and banking early left the results screen showing a score above its own
+      // high score.
       this.scene.start('GameOverScene', {
         score: this.score,
-        highScore: this.highScore,
         stage: this.stage,
         stats: this.stats,
       });
@@ -1235,11 +1288,20 @@ export class GameScene extends Phaser.Scene {
     const right = this.keys.right.isDown || this.keys.altRight.isDown;
     this.player.setVelocityX(((right ? 1 : 0) - (left ? 1 : 0)) * PLAYER.speed);
 
+    // World bounds stop the *body*, which is deliberately narrower than the
+    // frame the ship is drawn in, so on its own it would let the wingtips slide
+    // off the edge of the screen. Clamping the sprite keeps the whole fighter
+    // visible without widening the hitbox back out.
+    // A docked wingman is part of the ship the player is flying, so the pair is
+    // clamped together rather than letting the second ship leave the field.
+    const halfShip = SHIP_DRAWN_PX / 2;
+    const rightLimit =
+      SCREEN.width - halfShip - (this.dualFighter ? DUAL_FIGHTER_OFFSET_X : 0);
+    this.player.x = Phaser.Math.Clamp(this.player.x, halfShip, rightLimit);
+
     if (this.dualFighter) {
       this.dualFighter.setPosition(this.player.x + DUAL_FIGHTER_OFFSET_X, this.player.y);
     }
-
-    if (Phaser.Input.Keyboard.JustDown(this.keys.fire)) this.fire();
   }
 
   /**
@@ -1255,6 +1317,10 @@ export class GameScene extends Phaser.Scene {
    * miss occupies a slot until it flies off the top of the screen.
    */
   fire() {
+    // Fired from a key event rather than from `update`, so this has to check
+    // for itself that there is a ship to fire from: a dead player between
+    // respawns, or a game already over, would otherwise still shoot.
+    if (this.isGameOver || !this.player.active) return;
     if (this.bullets.countActive(true) >= bulletLimit(this.captureState)) return;
 
     this.spawnBullet(this.player.x);
@@ -1359,8 +1425,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   refreshHud() {
-    this.scoreText.setText(`SCORE ${this.score}`);
-    this.highScoreText.setText(`HIGH ${this.highScore}`);
+    this.scoreText.setText(String(this.score));
+    this.highScoreText.setText(String(this.highScore));
     this.drawLives();
     this.drawFlags();
   }
@@ -1370,13 +1436,21 @@ export class GameScene extends Phaser.Scene {
     this.lifeIcons = [];
 
     // Spaced wider than the icons are drawn, so a row of spare ships reads as
-    // separate ships rather than one smear.
-    for (let i = 0; i < Math.max(this.lives - 1, 0); i += 1) {
+    // separate ships rather than one smear, and capped at the number that fits
+    // beside the stage flags: a player on a good run can bank more spare ships
+    // than the row is wide, and the arcade stops drawing them rather than
+    // running them into the flags.
+    const shown = Math.min(Math.max(this.lives - 1, 0), LIFE_ICONS_SHOWN);
+
+    for (let i = 0; i < shown; i += 1) {
       this.lifeIcons.push(
         this.add
-          .image(16 + i * 32, SCREEN.height - 14, 'player')
+          .image(
+            16 + i * 36,
+            SCREEN.height - 14,
+            shipTextureKey('player', SHIP_ART.lifeIconPixelSize),
+          )
           .setOrigin(0, 1)
-          .setScale(SPRITE_SCALE.lifeIcon)
           .setDepth(20),
       );
     }

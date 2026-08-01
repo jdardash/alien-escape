@@ -20,6 +20,30 @@ export function isChallengingStage(stage) {
 }
 
 /**
+ * The highest stage number the counter reaches before it wraps.
+ *
+ * Galaga keeps the stage in a single byte, and it is allowed to overflow: the
+ * stage after 255 is announced as stage zero. It is not a crash and it is not a
+ * kill screen -- the game keeps going, the flags along the bottom of the HUD
+ * empty out because zero needs none, and the next stage is 1 again.
+ */
+export const STAGE_ROLLOVER = 255;
+
+/**
+ * The stage after this one.
+ *
+ * Everything a stage decides for itself -- its entrance pattern, whether it is
+ * a Challenging Stage, which transform enemy it produces, how many flags it
+ * shows -- is derived from this number, so all of it wraps with it. What does
+ * *not* wrap is the difficulty, which `GameScene` drives from a separate count
+ * of stages played: a player who has survived 255 stages should not be handed
+ * the opening round's dive interval as a reward.
+ */
+export function nextStage(stage) {
+  return stage >= STAGE_ROLLOVER ? 0 : stage + 1;
+}
+
+/**
  * Whether arriving enemies bomb while still flying into formation.
  *
  * The arcade holds fire through the whole of round 1's assembly and opens up

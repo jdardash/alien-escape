@@ -11,12 +11,24 @@
  * authoring it a pixel at a time.
  */
 
-import { FLAG_ART, TRANSFORM } from '../config.js';
-import { parsePixelArt, TRANSFORM_SPRITES, FLAG_SPRITES } from './pixelArt.js';
+import { FLAG_ART, SHIP_ART, TRANSFORM } from '../config.js';
+import { parsePixelArt, TRANSFORM_SPRITES, FLAG_SPRITES, SHIP_SPRITES } from './pixelArt.js';
 
 /** Texture key for a stage flag of the given denomination. */
 export function flagTextureKey(value) {
   return `flag${value}`;
+}
+
+/**
+ * Texture key for a ship at a given size.
+ *
+ * The size is part of the key because the same grid is drawn at three of them:
+ * 48px in play, 32px as a life icon, 80px under the title. Each is generated
+ * separately at exactly its drawn size rather than one being scaled to the
+ * others, so no use of the artwork is ever resampled.
+ */
+export function shipTextureKey(name, pixelSize = SHIP_ART.pixelSize) {
+  return `ship-${name}-${pixelSize}`;
 }
 
 /** Texture key for one of the transform bonus ships. */
@@ -48,6 +60,28 @@ export function createPixelTexture(scene, key, sprite, pixelSize) {
 
   scene.textures.get(key).setFilter(Phaser.Textures.FilterMode.NEAREST);
   return key;
+}
+
+/**
+ * Build one ship texture, at one size.
+ *
+ * Separate from `createShipTextures` because the title screen wants only the
+ * fighter and wants it at 80px, and building the whole enemy set for an
+ * attract screen that shows none of them would be waste.
+ */
+export function createShipTexture(scene, name, pixelSize = SHIP_ART.pixelSize) {
+  const sprite = SHIP_SPRITES[name];
+  if (!sprite) throw new Error(`No ship artwork named "${name}"`);
+  return createPixelTexture(scene, shipTextureKey(name, pixelSize), sprite, pixelSize);
+}
+
+/** Build every ship at its gameplay size, plus the fighter at life-icon size. */
+export function createShipTextures(scene) {
+  for (const name of Object.keys(SHIP_SPRITES)) {
+    createShipTexture(scene, name, SHIP_ART.pixelSize);
+  }
+
+  createShipTexture(scene, 'player', SHIP_ART.lifeIconPixelSize);
 }
 
 /** Build all three transform bonus ships. */

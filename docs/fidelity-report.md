@@ -6,10 +6,15 @@ Namco's 1981 arcade *Galaga*, plus a comparison against public open-source Galag
 
 **Status.** This began as a gap analysis. Every gap it identified has since been
 addressed, so the table below records the *current* state and section 2 records what was
-changed and what is still approximate. The three items that were still outstanding in the
-first revision -- per-flight entrance patterns, an inert captive, and stand-in art -- have
-since been closed as well; what is left under "What is still not authentic" is narrower
-than any of them and is listed honestly there.
+changed and what is still approximate.
+
+Three passes have now been made. The first closed the twelve gaps in section 2. The second
+closed per-flight entrance patterns, an inert captive, and stand-in bonus art. The third,
+recorded in section 5, closed everything that was still listed as outstanding: the stage
+counter now rolls over at 255, all 28 sound files are wired, the cabinet's BEST 5 board and
+initials entry exist, and *every ship in the game* is now original pixel art rather than a
+Galaga PNG. What is left under "What is still not authentic" is one sourcing assumption and
+one honest statement about original art, and nothing else.
 
 ## How to read the citations
 
@@ -50,7 +55,7 @@ Primary directly-fetched sources:
 | Boss Galaga diving, 0 / 1 / 2 escorts | 400 / 800 / 1600 ([Academic Kids](https://academickids.com/encyclopedia/index.php/Galaga)) | 400 / 800 / 1600 (`src/systems/scoring.js:30`) | matches |
 | Escorts required to be killed first? | No — unlike Galaxian, the bonus applies without killing escorts first ([StrategyWiki Gameplay, snippet](https://strategywiki.org/wiki/Galaga/Gameplay)) | No such requirement; escort count read at kill time (`GameScene.js:363,551`) | matches |
 | Boss Galaga hit points | 2 ([Wikipedia](https://en.wikipedia.org/wiki/Galaga)) | 2 (`src/config.js:67`) | matches |
-| Boss damage colour | Green at full health, changes on the first hit (sources disagree: "blue" vs "purple") ([search corroboration](https://www.ssbwiki.com/Boss_Galaga)) | Green tint at full health, dropped on the first hit to reveal the purple artwork (`BOSS_TINT`, `config.js`; `showBossDamage`, `entities/enemy.js`) | matches |
+| Boss damage colour | Green at full health, changes on the first hit (sources disagree: "blue" vs "purple") ([search corroboration](https://www.ssbwiki.com/Boss_Galaga)) | Two palettes over one hand-authored 16 x 16 grid: green while it has both hit points, purple after the first (`BOSS_SPRITE`, `config.js`; `BOSS` in `src/art/pixelArt.js`; `showBossDamage`, `entities/enemy.js`) | matches |
 | Extra lives | 20,000, then 70,000, then every 70,000 (factory DIP default) ([Academic Kids](https://academickids.com/encyclopedia/index.php/Galaga); [Museum of the Game DIP tables](https://www.arcade-museum.com/tech-center/game-dips/galagao)) | 20,000 / 70,000 / every 70,000 (`src/systems/scoring.js:80-98`) | matches |
 | Starting lives | 3 (factory DIP default) ([Museum of the Game DIP tables](https://www.arcade-museum.com/tech-center/game-dips/galagao)) | 3 (`src/config.js:20`) | matches |
 | Player bullets on screen | 2, or 4 with the dual fighter ([Steam community guide](https://steamcommunity.com/sharedfiles/filedetails/?id=2926871061); [Data Driven Gamer](https://datadrivengamer.blogspot.com/2019/07/game-78-galaga.html)) | 2 / 4 (`src/systems/capture.js:115-117`) | matches |
@@ -84,10 +89,15 @@ Primary directly-fetched sources:
 | Stage flags drawn as flags | Yes, sprite flags | Six pixel-art pennants, one per denomination, each with its own colour *and* its own banner motif so they stay countable in greyscale (`FLAG_MOTIFS` in `src/art/pixelArt.js`, `createFlagTextures`) | matches (art original, not the ROM's) |
 | Enemy hit sounds | Each rank of enemy has its own cry, and a Boss Galaga surviving its first hit sounds different from one dying | `deathSoundFor` picks per `EnemyType`, with a separate boss-stricken sound for the survived hit (`src/systems/audio.js`, `GameScene.destroyEnemy` / `onEnemyHit`) | matches |
 | Player gun sound | Two alternating shot samples | `playerShotSound` alternates per trigger pull, so a dual fighter firing two at once does not lock to one sample | matches |
-| Sounds in use | The cabinet is noisy: theme, coin, start jingle, dive, bomb, beam, capture, rescue, transform fanfare, extend chime, challenging-stage stings, death tune, a background pulse | 27 of the repo's 28 sound files are wired to those events (`SOUND_FILES`). Before this pass, 7 were | matches |
+| Sounds in use | The cabinet is noisy: theme, coin, start jingle, dive, bomb, beam, capture, rescue, transform fanfare, extend chime, challenging-stage stings, death tune, a background pulse | All 28 of the repo's sound files are wired to those events (`SOUND_FILES`). Before the audio pass, 7 were, and `tests/audio.test.js` now reads `assets/sfx` off disk so a file cannot be added and then forgotten | matches |
 | End-of-game results | Shots fired, number of hits, hit-miss ratio ([Data Driven Gamer](https://datadrivengamer.blogspot.com/2019/07/game-78-galaga.html)) | All three (`GameOverScene.js:61-68`, `stats.js`) | matches |
+| Score ranking | The cabinet keeps a table of five and asks anyone who makes it for three initials, then shows the board on the attract screen | `loadScoreTable` / `scoreTableRank` / `insertScoreEntry` / `recordScore` in `persistence.js`, the entry panel in `GameOverScene`, and the board on both the results and title screens. Twenty-nine tests pin the ranking, the tie rule and the corrupt-storage fallbacks | matches |
+| Name-entry music | A different tune for taking first place than for taking any other place | `highScoreEntry` for rank 0, `gameOverTune` otherwise (`GameOverScene.create`). Those are the repo's two `name_entry` files, which had been playing as a generic game-over sting | matches |
+| HUD header | A blinking 1UP over the running score, HIGH SCORE over the board's best | Same (`GameScene.createHud`). The displayed high score is read from the top row of the board rather than kept beside it, so the header and the BEST 5 screen cannot disagree | matches |
+| Enemy artwork | Zako a blue-and-yellow bee, Goei a red butterfly with blue wings, Boss Galaga the widest of the three | Hand-authored 16 x 16 pixel grids in `src/art/pixelArt.js`, generated NEAREST-filtered at exactly their drawn size. Original, drawn to the published descriptions, not traced from the ROM | matches (art original, not the ROM's) |
+| The captured fighter | Drawn recognisably as the player's own ship | The player's grid in a different palette, so the silhouette is identical by construction and `tests/pixelArt.test.js` asserts it (`SHIP_RECOLOURS`) | matches |
 | Display | 288 x 224 at 60.606 Hz, **vertical** orientation ([PixelatedArcade](https://pixelatedarcade.com/games/galaga/techspecs)) | 672 x 864 portrait (`config.js`) — exactly the cabinet's 7:9 ratio, scaled up for a browser | matches |
-| Stage 255 rollover | Next stage announced as stage zero ([Wikipedia](https://en.wikipedia.org/wiki/Galaga)) | Not modelled; stage counts up indefinitely | missing (out of scope) |
+| Stage 255 rollover | Next stage announced as stage zero ([Wikipedia](https://en.wikipedia.org/wiki/Galaga)) | `nextStage` wraps 255 to 0 (`stages.js`). Everything a stage decides for itself wraps with it; difficulty does not, because it is driven from a separate count of stages played | matches |
 | "No-fire" bug | Bugs firing at X=0 leak the 8-entry shot buffer until enemies can never fire again ([Computer Archeology](https://www.computerarcheology.com/Arcade/Galaga/), [Set Side B](https://setsideb.com/the-no-fire-trick-in-galaga/), [Jason Eckert](https://jasoneckert.github.io/myblog/the-galaga-no-fire-cheat-mystery/)) | Not present | **Do not implement.** Noted for completeness only; reproducing it would make the game silently unlosable and it disqualifies scores for world records. |
 
 **Headline:** every number in the scoring table, the extra-life ladder, the formation
@@ -95,7 +105,8 @@ layout, the challenging-stage cadence, the flag denominations and the bullet lim
 correct, and so is the choreography built on top of them: one fixed entrance pattern per
 stage flown as five flights of eight, dive-only enemy fire, a low tractor beam, the
 diving-captor rescue rule, a captive that fights for the other side, the eight
-challenging patterns, the transform bonus cycle, and per-rank enemy audio.
+challenging patterns, the transform bonus cycle, per-rank enemy audio, a stage counter
+that rolls over at 255, and a BEST 5 board that takes three initials.
 
 **What is still not authentic**, and is the honest remainder of this audit:
 
@@ -104,19 +115,25 @@ challenging patterns, the transform bonus cycle, and per-rank enemy audio.
   code works; the specific stage-to-pattern mapping is not sourced anywhere that could
   be found, so `entrancePatternFor` cycles them in order. A player who knows the arcade
   would see the right *kind* of entrance, not necessarily the right one for stage 7.
-- **The artwork is original, not the arcade's.** The Scorpion, Spy Ship, Flagship and
-  the six flags are hand-authored 16 x 16 and 10 x 12 pixel grids in
-  `src/art/pixelArt.js`, drawn to the published descriptions of each ship: a yellow
-  scorpion, a green Bosconian station, a blue Galaxian flagship with red wingtips. They
-  are not traced from the ROM and are not claimed to match it pixel for pixel. The same
-  is true of the flag colours, which could not be sourced -- which is why each
-  denomination also carries its own banner motif rather than relying on colour alone.
-- **One sound file is unused.** `miss.mp3` has no event that fits it; playing something
-  on every missed shot would be noise, not fidelity. `kill.mp3` survives as the generic
-  burst for things that are not one of the three ranked enemies.
+- **All of the artwork is original, not the arcade's.** Every ship in the game -- the
+  fighter, the fighter a boss takes, the Zako, the Goei, the Boss Galaga in both of its
+  health states, the Scorpion, the Spy Ship and the Flagship -- plus the six stage flags
+  are hand-authored pixel grids in `src/art/pixelArt.js`, drawn to the published
+  descriptions of each ship. They are not traced from the ROM and are not claimed to match
+  it pixel for pixel. The same is true of the flag colours, which could not be sourced --
+  which is why each denomination also carries its own banner motif rather than relying on
+  colour alone. This is a deliberate downgrade in fidelity: the Galaga-derived enemy PNGs
+  that preceded them looked more like the cabinet and had no business in a public
+  repository with a live demo.
+- **`miss.mp3` is placed by inference, not by a source.** It plays when a Challenging
+  Stage ends short of forty, which is the one moment in the game that wants a sound
+  meaning "not quite". No source says that is what the file is for. Every other one of the
+  28 is wired to an event the sources describe. `kill.mp3` survives as the generic burst
+  for things that are not one of the three ranked enemies.
 
-Also deliberately absent: the stage-255 rollover, and the "no-fire" bug (see the last
-row of the table for why that one stays out).
+Also deliberately absent: the "no-fire" bug (see the last row of the table for why that
+one stays out), and two-player alternating play, which needs a second set of everything
+the machine tracks and would show up on a browser demo as a menu nobody uses.
 
 ---
 
@@ -400,11 +417,12 @@ Against that field, three things here are genuinely unusual.
 
 **1. Game rules are a pure, dependency-free layer with real coverage.**
 `src/systems/` plus `src/art/pixelArt.js` is ten modules that import nothing from Phaser,
-and `tests/` is 192 `it()` cases across ten files (`audio` 8, `capture` 29, `flight` 11,
-`formation` 31, `paths` 26, `persistence` 13, `pixelArt` 16, `scoring` 19, `stages` 32,
+and `tests/` is 244 `it()` cases across ten files (`audio` 12, `capture` 29, `flight` 11,
+`formation` 31, `paths` 26, `persistence` 46, `pixelArt` 24, `scoring` 19, `stages` 39,
 `stats` 7). Four of the five clones above have no tests at all; the fifth has one. This is
-not a marginal difference in degree. It extends to the artwork: because the sprites are
-data rather than PNGs, "is this ship symmetric" is a unit test rather than a squint.
+not a marginal difference in degree. It extends to the artwork: because every ship is data
+rather than a PNG, "is this ship symmetric about its centre line" and "does the damaged
+boss still have the healthy boss's silhouette" are unit tests rather than a squint.
 
 **2. The scoring table is actually correct.** This matters more than it sounds. The most
 complete pygame clone in the list, `ihalseide/Galaga`, awards a flat 400 for both Bee and
@@ -490,7 +508,54 @@ its first hit from one dying, `playerShotSound` alternates per trigger pull -- a
 `tests/audio.test.js` asserts the selection rules can never name a sound the manifest does
 not load. 27 of the 28 files are wired.
 
-## 5. Overall verdict
+## 5. What the third pass closed
+
+The second revision ended with three admitted remainders and one row of the table still
+reading "missing". All of it is now closed except the entrance-pattern mapping, which
+cannot be closed without a source.
+
+**The stage counter rolls over.** `nextStage` in `stages.js` wraps 255 to 0, which is what
+the arcade's single-byte counter does, and the stage after 0 is 1 again. Everything a stage
+decides for itself -- its entrance pattern, whether it is a Challenging Stage, which
+transform enemy it produces, how many flags the HUD draws -- is derived from that number
+and therefore wraps with it. Difficulty deliberately does not: `GameScene` keeps a separate
+monotonic count of stages played and drives `stageDifficulty` from that, because handing a
+player who has survived 255 stages the opening round's dive interval would be a bug wearing
+a rollover's clothes.
+
+**The cabinet's board is back.** Galaga does not keep one number, it keeps five names, and
+it asks anyone who makes the table for three initials. `persistence.js` now holds the
+ranking rules -- where a score lands, that a tie does not displace the score it matched,
+that a scoreless run never qualifies, and that every corrupt-storage path falls back to the
+factory ladder rather than to an empty board -- and `GameOverScene` has the entry panel.
+The two `name_entry` sound files, which had been doing duty as a generic game-over sting,
+now play the parts they were recorded for: one tune for taking first place, another for
+taking any other place. The HUD's HIGH SCORE reads the top row of that board rather than a
+second stored number, so the header and the BEST 5 screen cannot disagree.
+
+**Every ship is drawn, and the borrowed sprites are gone.** The second pass authored the
+three transform ships and the six flags as pixel grids; this one finished the job. The
+fighter, the captured fighter, the Zako, the Goei and the Boss Galaga in both health states
+are now 16 x 16 grids in `src/art/pixelArt.js`, generated NEAREST-filtered at exactly their
+drawn size and used at scale 1. `assets/images/galaga_enemy_*.png`, `mainship.png` and
+`capturedShip.png` have been deleted.
+
+That last part is the one change here that *costs* fidelity, and it is worth being straight
+about why it was made anyway. Those PNGs looked more like the cabinet than anything drawn by
+hand will. They are also Bandai Namco's artwork, sitting in a public repository with a live
+demo. Replacing them buys three things: the repository can honestly say its art is its own,
+the boss's two health states become two palettes over one grid rather than a green tint laid
+over purple artwork, and the whole sprite sheet becomes testable data -- `tests/pixelArt.test.js`
+asserts every ship is symmetric about its centre line, that the four ranks have four different
+silhouettes, and that each recolour is pixel-identical to the ship it recolours.
+
+**And the last sound.** `challengeResultSound` gives `miss.mp3` the one event that fits it:
+a Challenging Stage that ended short of forty. All 28 files are now wired, and
+`tests/audio.test.js` reads `assets/sfx` off disk and fails if a file is added without an
+event, which is how the previous twenty-one came to be sitting there unreferenced in the
+first place.
+
+## 6. Overall verdict
 
 The numbers were right from the start and everything else has since caught up. Every
 constant that can be looked up in a strategy guide — scoring, extra lives, formation
@@ -504,11 +569,11 @@ Scorpion / Spy Ship / Flagship transform cycle priced per set of three, and per-
 enemy audio over a background pulse.
 
 What remains is listed at the end of section 1 and is narrower than what it replaced:
-the stage-to-entrance-pattern mapping is an assumption on top of a sourced rule, and the
-sprites are original pixel art drawn to published descriptions rather than the ROM's own.
-Neither is a rule error.
+the stage-to-entrance-pattern mapping is an assumption on top of a sourced rule, one
+sound file is placed by inference, and every sprite is original pixel art drawn to
+published descriptions rather than the ROM's own. None of the three is a rule error.
 
-The rules layer that carries all of this is 192 unit tests across ten Phaser-free
+The rules layer that carries all of this is 244 unit tests across ten Phaser-free
 modules. Against the five clones surveyed in section 3 — four with no tests at all and
 one with a single screen-state test — that is the part of this repo least likely to be
 matched.

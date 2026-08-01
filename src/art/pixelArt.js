@@ -1,23 +1,28 @@
 /**
  * Hand-authored sprite artwork, as pixel grids.
  *
- * Three of the ships this game needs have no artwork in the repo: the
- * Scorpion, the Bosconian Spy Ship and the Galaxian Flagship that the transform
- * bonus cycles through, plus the six stage flags along the bottom of the HUD.
- * The stand-in for them was an existing enemy silhouette filled with a flat
- * colour, which got the colour right and the shape wrong -- three different
- * bonus ships that were the same ship in three colours.
+ * Every ship in the game is drawn here: the player's fighter and the fighter a
+ * Boss Galaga takes from them, the three ranks of enemy, and the Scorpion, Spy
+ * Ship and Flagship the transform bonus cycles through, plus the six stage
+ * flags along the bottom of the HUD.
  *
- * These are drawn instead: original pixel art authored at 16 x 16, the size
- * the arcade's own sprites are, and turned into textures at run time. Authoring
- * them as data rather than as PNGs means the shapes are reviewable in a diff
- * and testable without a canvas, which is what lets `tests/pixelArt.test.js`
- * assert that every ship is symmetric about its centre line -- the failure mode
- * of hand-edited pixel grids.
+ * All of it is original pixel art authored at 16 x 16, the size the arcade's
+ * own sprites are, and turned into textures at run time. That replaced two
+ * different stand-ins: bonus ships drawn as an existing enemy silhouette filled
+ * with a flat colour, which made three different ships one shape in three
+ * colours, and a set of PNGs of the arcade's own enemies, which is Bandai
+ * Namco's artwork and has no business in a public repository with a live demo.
+ *
+ * Authoring the art as data rather than as PNGs means the shapes are reviewable
+ * in a diff and testable without a canvas, which is what lets
+ * `tests/pixelArt.test.js` assert that every ship is symmetric about its centre
+ * line -- the failure mode of hand-edited pixel grids.
  *
  * Nothing here is traced from the original ROM. The silhouettes follow the
- * published descriptions of each ship: a yellow scorpion, a green Bosconian
- * station, a blue Galaxian flagship with red wingtips.
+ * published descriptions of each ship: a blue-and-yellow bee, a red butterfly
+ * with blue wings, a green Boss Galaga that turns purple on its first hit, a
+ * yellow scorpion, a green Bosconian station, a blue Galaxian flagship with
+ * red wingtips.
  */
 
 import { FLAG_ART } from '../config.js';
@@ -57,6 +62,197 @@ export function parsePixelArt(rows, palette) {
 
   return { width, height: rows.length, pixels };
 }
+
+/**
+ * The Zako, the bee that fills the bottom two rows of the formation.
+ *
+ * Blue hull with a pair of antennae above and legs below, and the wide flat
+ * yellow wings that are how a Zako is told from a Goei at the far end of a
+ * dive, when neither is much more than a shape.
+ */
+const ZAKO = {
+  rows: [
+    '.....d....d.....',
+    '......d..d......',
+    '.....dccccd.....',
+    '....dcwccwcd....',
+    '....dcwccwcd....',
+    '....dccccccd....',
+    '..yydccccccdyy..',
+    '.yyydccccccdyyy.',
+    '.yyydccddccdyyy.',
+    '..yydccccccdyy..',
+    '....dccccccd....',
+    '.....dccccd.....',
+    '.....dccccd.....',
+    '.....dc..cd.....',
+    '....d......d....',
+    '...d........d...',
+  ],
+  palette: {
+    c: 0x38a8f0,
+    d: 0x123c78,
+    w: 0xffffff,
+    y: 0xf0c020,
+  },
+};
+
+/**
+ * The Goei, the red butterfly of the two middle rows.
+ *
+ * Same body plan as the Zako -- they are the same creature one rank up -- but
+ * red instead of blue, and with blue wings that sweep back to a point rather
+ * than standing straight out. The taper is the silhouette cue: a Goei is
+ * widest at its shoulders, a Zako is widest at its waist.
+ */
+const GOEI = {
+  rows: [
+    '.....dd..dd.....',
+    '.....drrrrd.....',
+    '.b..drwrrwrd..b.',
+    '.bb.drrrrrrd.bb.',
+    '.bbbdrrrrrrdbbb.',
+    '.bbbdrrrrrrdbbb.',
+    '.bbbdrdrrdrdbbb.',
+    '..bbdrrrrrrdbb..',
+    '...bdrrrrrrdb...',
+    '....drrrrrrd....',
+    '....drrrrrrd....',
+    '....drrrrrrd....',
+    '.....drrrrd.....',
+    '.....drrrrd.....',
+    '.....dr..rd.....',
+    '....d......d....',
+  ],
+  palette: {
+    r: 0xf03028,
+    d: 0x8c1810,
+    w: 0xffffff,
+    b: 0x3878f0,
+  },
+};
+
+/**
+ * The Boss Galaga. The widest thing on the board, and the only enemy that
+ * survives a hit.
+ *
+ * One grid, two palettes. The arcade boss is green while it still has both of
+ * its hit points and changes colour the moment it takes the first, which is the
+ * player's only cue that a second shot is needed; sources agree on the green
+ * and disagree on whether the damaged colour is blue or purple. Keeping the
+ * silhouette identical between the two is what makes the change read as damage
+ * rather than as a different enemy, and driving it from one `rows` means the
+ * two states cannot drift a pixel apart.
+ *
+ * This replaced a green `setTint` laid over purple artwork, which had the same
+ * effect from a distance and flattened the shading up close.
+ */
+const BOSS_ROWS = [
+  '...k........k...',
+  '...kg......gk...',
+  '...kgk....kgk...',
+  '....kggggggk....',
+  '...kgwggggwgk...',
+  '..kggwggggwggk..',
+  '.kggggggggggggk.',
+  'kggwwggggggwwggk',
+  'kgggggeggegggggk',
+  '.kggggeggeggggk.',
+  '.kggggggggggggk.',
+  '..kggggggggggk..',
+  '...kggggggggk...',
+  '....kggggggk....',
+  '.....kggggk.....',
+  '......kkkk......',
+];
+
+const BOSS = {
+  rows: BOSS_ROWS,
+  palette: { g: 0x3cdc50, k: 0x0e5a20, w: 0xd8ffe0, e: 0x0c2a12 },
+};
+
+const BOSS_DAMAGED = {
+  rows: BOSS_ROWS,
+  palette: { g: 0xc060f0, k: 0x4a1080, w: 0xf0d8ff, e: 0x1c0830 },
+};
+
+/**
+ * The player's fighter: a white hull with red wings and a lit cockpit,
+ * narrowing to a single point at the nose.
+ *
+ * The point matters. The fighter is the one sprite on screen that has to be
+ * located exactly rather than approximately, because every dodge is measured
+ * against it, so the tip is one pixel wide and the widest part of the ship sits
+ * low where the wings are.
+ */
+const PLAYER_ROWS = [
+  '.......ww.......',
+  '.......ww.......',
+  '......wwww......',
+  '......wrrw......',
+  '......wrrw......',
+  '.....wwrrww.....',
+  '.....wbrrbw.....',
+  '.....wbrrbw.....',
+  '..w..wwrrww..w..',
+  '..w..wwrrww..w..',
+  '..w.rwwrrwwr.w..',
+  '.rw.rwwrrwwr.wr.',
+  'rrwwrwwrrwwrwwrr',
+  'rrwwwwwrrwwwwwrr',
+  'r.wwwwwwwwwwww.r',
+  '....k..kk..k....',
+];
+
+const PLAYER_SHIP = {
+  rows: PLAYER_ROWS,
+  palette: { w: 0xf0f0f8, r: 0xf04038, b: 0x40b8f8, k: 0xff8800 },
+};
+
+/**
+ * The same fighter, once a Boss Galaga is holding it.
+ *
+ * The arcade draws the captured ship recognisably as your own, which is the
+ * point of the mechanic: the thing hanging under that boss is the life you
+ * just lost. Here it keeps the silhouette exactly and loses the palette -- grey
+ * hull, violet wings, dead engines -- because the player has a real decision to
+ * make about it (shoot it for 1,000 and lose it, or hunt the captor for the
+ * dual fighter) and needs to be able to tell it apart from the ship they are
+ * flying at a glance.
+ */
+const CAPTIVE_SHIP = {
+  rows: PLAYER_ROWS,
+  palette: { w: 0x9098a8, r: 0x8058c0, b: 0x5a6478, k: 0x3a3a48 },
+};
+
+/**
+ * Every ship texture the game builds, keyed by the name it is drawn under.
+ *
+ * The three enemy keys are the `EnemyType` values, so `createEnemy` can go
+ * straight from a formation slot to its artwork without a lookup table in
+ * between.
+ */
+export const SHIP_SPRITES = {
+  zako: ZAKO,
+  goei: GOEI,
+  boss: BOSS,
+  bossDamaged: BOSS_DAMAGED,
+  player: PLAYER_SHIP,
+  captive: CAPTIVE_SHIP,
+};
+
+/**
+ * The ships that carry a silhouette of their own.
+ *
+ * `bossDamaged` and `captive` are deliberately excluded: they are recolours of
+ * `boss` and `player` and are *supposed* to share a shape. Listing the four
+ * that are not lets `tests/pixelArt.test.js` insist the rest are all different
+ * without contradicting that.
+ */
+export const DISTINCT_SHIP_SILHOUETTES = ['zako', 'goei', 'boss', 'player'];
+
+/** Recolours, and the sprite each one has to stay pixel-identical to. */
+export const SHIP_RECOLOURS = { bossDamaged: 'boss', captive: 'player' };
 
 /**
  * The Scorpion, stages 4-6. Sourced as yellow.

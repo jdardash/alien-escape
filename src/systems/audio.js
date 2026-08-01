@@ -53,6 +53,7 @@ export const SOUND_FILES = {
   challengeStart: 'assets/sfx/challenge_start.mp3',
   challengeClear: 'assets/sfx/challenge_clear.mp3',
   challengePerfect: 'assets/sfx/challenge_perfect.mp3',
+  challengeMiss: 'assets/sfx/miss.mp3',
   transformSet: 'assets/sfx/triple_formation.mp3',
   extraLife: 'assets/sfx/extend_sound.mp3',
 
@@ -80,6 +81,20 @@ export function deathSoundFor(enemyType, { destroyed = true } = {}) {
   if (enemyType === EnemyType.BOSS) return destroyed ? 'bossDeath' : 'bossHit';
   if (enemyType === EnemyType.GOEI) return 'goeiDeath';
   return 'zakoDeath';
+}
+
+/**
+ * How a Challenging Stage signs off.
+ *
+ * The bonus round is scored on one question -- did you get all forty -- and the
+ * cabinet answers it before the banner does. This is the only place `miss.mp3`
+ * fits: the file has no sourced event attached to it, but a round that ended
+ * short is the one moment in the game that wants a sound meaning "not quite",
+ * and every other candidate (a shot that hit nothing, an enemy that escaped)
+ * would fire so often it would be noise rather than feedback.
+ */
+export function challengeResultSound(hits, total) {
+  return hits >= total ? 'challengePerfect' : 'challengeMiss';
 }
 
 /**

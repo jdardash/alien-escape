@@ -1,7 +1,29 @@
 import { describe, it, expect } from 'vitest';
-import { parsePixelArt, composeFlag, TRANSFORM_SPRITES, FLAG_SPRITES } from '../src/art/pixelArt.js';
+import {
+  parsePixelArt,
+  composeFlag,
+  TRANSFORM_SPRITES,
+  FLAG_SPRITES,
+  SHIP_SPRITES,
+  DISTINCT_SHIP_SILHOUETTES,
+  SHIP_RECOLOURS,
+} from '../src/art/pixelArt.js';
 import { TransformType, stageFlags } from '../src/systems/stages.js';
+import { EnemyType } from '../src/systems/formation.js';
 import { FLAG_ART } from '../src/config.js';
+
+/** Every painted cell of a sprite, as "x,y" keys. */
+function silhouette(art) {
+  return art.pixels.map((pixel) => `${pixel.x},${pixel.y}`);
+}
+
+/** Cells that have no counterpart across the sprite's vertical centre line. */
+function unmirroredCells(art) {
+  const painted = new Set(silhouette(art));
+  return art.pixels
+    .map((pixel) => ({ x: art.width - 1 - pixel.x, y: pixel.y }))
+    .filter((mirror) => !painted.has(`${mirror.x},${mirror.y}`));
+}
 
 describe('parsePixelArt', () => {
   const palette = { a: 0xff0000, b: 0x00ff00 };
@@ -28,6 +50,70 @@ describe('parsePixelArt', () => {
 
   it('rejects an empty grid', () => {
     expect(() => parsePixelArt([], palette)).toThrow();
+  });
+});
+
+describe('ship artwork', () => {
+  const drawn = Object.fromEntries(
+    Object.entries(SHIP_SPRITES).map(([name, sprite]) => [
+      name,
+      parsePixelArt(sprite.rows, sprite.palette),
+    ]),
+  );
+
+  // `createEnemy` goes straight from a slot's type to its texture, so a rank
+  // with no artwork is a missing sprite at run time rather than a build error.
+  it('draws one ship per rank the formation can place', () => {
+    for (const type of Object.values(EnemyType)) {
+      expect(SHIP_SPRITES[type]).toBeDefined();
+    }
+  });
+
+  it('draws the player and the fighter a boss takes from them', () => {
+    expect(SHIP_SPRITES.player).toBeDefined();
+    expect(SHIP_SPRITES.captive).toBeDefined();
+  });
+
+  it('is authored at the arcade sprite size of 16 by 16', () => {
+    for (const art of Object.values(drawn)) {
+      expect(art.width).toBe(16);
+      expect(art.height).toBe(16);
+    }
+  });
+
+  it('draws every ship symmetrically about its centre line', () => {
+    for (const [name, art] of Object.entries(drawn)) {
+      expect({ name, unmirrored: unmirroredCells(art) }).toEqual({ name, unmirrored: [] });
+    }
+  });
+
+  it('fills enough of the frame to read as a ship rather than a speck', () => {
+    for (const art of Object.values(drawn)) {
+      expect(art.pixels.length).toBeGreaterThan(60);
+    }
+  });
+
+  it('gives each rank its own silhouette, not one shape recoloured', () => {
+    const shapes = DISTINCT_SHIP_SILHOUETTES.map((name) => silhouette(drawn[name]).join('|'));
+    expect(new Set(shapes).size).toBe(shapes.length);
+  });
+
+  // A Boss Galaga changing colour on its first hit, and a captured fighter
+  // hanging under its captor, both have to read as the *same ship* in a
+  // different state. A shifted pixel would turn either into a different enemy.
+  it('keeps each recolour pixel-identical to the ship it recolours', () => {
+    for (const [recolour, original] of Object.entries(SHIP_RECOLOURS)) {
+      expect(SHIP_SPRITES[recolour].rows).toEqual(SHIP_SPRITES[original].rows);
+    }
+  });
+
+  it('gives each recolour a palette of its own, or it would be invisible', () => {
+    for (const [recolour, original] of Object.entries(SHIP_RECOLOURS)) {
+      expect(SHIP_SPRITES[recolour].palette).not.toEqual(SHIP_SPRITES[original].palette);
+      expect(Object.keys(SHIP_SPRITES[recolour].palette).sort()).toEqual(
+        Object.keys(SHIP_SPRITES[original].palette).sort(),
+      );
+    }
   });
 });
 

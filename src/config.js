@@ -61,11 +61,35 @@ export const BACKGROUND_TILE_SCALE = 750 / 512;
  */
 export const BACKGROUND_SCROLL_PX = { game: 0.6, title: 0.4 };
 
+/**
+ * The pixel art, and how big each use of it is drawn.
+ *
+ * Every ship in the game -- the fighter, the fighter a boss takes, and the
+ * three ranks of enemy -- is a 16 x 16 grid in `src/art/pixelArt.js` rather
+ * than a PNG. `pixelSize` is screen pixels per art pixel, so the gameplay
+ * sprites come out at 48px: a shade under the formation's 57px column spacing,
+ * which is what keeps the assembled grid a grid rather than a solid block.
+ *
+ * Each size is generated as its own texture at exactly its drawn size and used
+ * at scale 1. Scaling a generated pixel texture would resample the pixels it
+ * was authored to keep, which is the whole reason for drawing it a pixel at a
+ * time.
+ */
+export const SHIP_ART = {
+  /** In formation and in the air. 16 x 3 = 48px. */
+  pixelSize: 3,
+  /** The spare-ship icons along the bottom of the HUD. 32px. */
+  lifeIconPixelSize: 2,
+  /** The ship sitting under the title. 80px. */
+  titlePixelSize: 5,
+};
+
+/** How wide a gameplay ship is drawn, for anything that has to lay out around one. */
+export const SHIP_DRAWN_PX = 16 * SHIP_ART.pixelSize;
+
 export const PLAYER = {
   speed: 270,
   y: SCREEN.height - 70,
-  /** ~43px on screen. */
-  scale: 43.008 / SPRITE_SOURCE_PX,
   bulletSpeed: 760,
   respawnDelayMs: 1600,
   invulnerableMs: 2000,
@@ -200,10 +224,24 @@ export const CAPTURE = {
 /** Horizontal gap between the player's ship and a docked dual fighter. */
 export const DUAL_FIGHTER_OFFSET_X = 29;
 
-/** Drawn sizes, in screen pixels, over the square the artwork is authored at. */
+/**
+ * How many spare-ship icons the HUD will draw.
+ *
+ * The extra-life ladder has no ceiling, so a long run banks more ships than the
+ * bottom of the screen is wide. Five is what fits to the left of the stage
+ * flags; beyond that the count is still there, it is just no longer drawn.
+ */
+export const LIFE_ICONS_SHOWN = 5;
+
+/**
+ * Drawn sizes, in screen pixels, over the square the *loaded* artwork is
+ * authored at.
+ *
+ * Only the effects and projectiles are loaded now. Every ship is generated
+ * from `src/art/pixelArt.js` at its drawn size and used at scale 1, so it has
+ * no entry here; see `SHIP_ART`.
+ */
 export const SPRITE_SCALE = {
-  enemy: 46.08 / SPRITE_SOURCE_PX,
-  boss: 51.2 / SPRITE_SOURCE_PX,
   bullet: 38.912 / SPRITE_SOURCE_PX,
   laser: 43.008 / SPRITE_SOURCE_PX,
   explosion: 51.2 / SPRITE_SOURCE_PX,
@@ -211,10 +249,6 @@ export const SPRITE_SCALE = {
   bossExplosion: 86.016 / SPRITE_SOURCE_PX,
   /** The player's own death, bigger again. */
   playerExplosion: 102.4 / SPRITE_SOURCE_PX,
-  /** The spare-ship icons along the bottom of the HUD. */
-  lifeIcon: 28.672 / SPRITE_SOURCE_PX,
-  /** The ship sitting under the title. */
-  titleShip: 77.824 / SPRITE_SOURCE_PX,
 };
 
 /** Enemy hit points. A Boss Galaga survives its first hit. */
@@ -224,28 +258,20 @@ export const ENEMY_HEALTH = {
   zako: 1,
 };
 
-/** Texture keys, mapped from the pure EnemyType values. */
-export const ENEMY_TEXTURE = {
-  boss: 'enemyBossPurple',
-  goei: 'enemyBossRed',
-  zako: 'enemyBee',
-};
-
 /**
- * A Boss Galaga's two health states, as a tint over its sprite.
+ * A Boss Galaga's two health states, as the sprite drawn for each.
  *
  * The arcade boss is green while it still has both hit points and changes
  * colour the moment it takes the first one, which is the player's only cue
  * that a second shot is needed. Sources agree on the green and disagree on
- * the damaged colour, so the damaged state here simply drops the tint and
- * lets the purple artwork show through, which satisfies both accounts of
- * "no longer green".
+ * whether the damaged colour is blue or purple, so this takes purple.
  *
- * Doing this as a tint rather than as two sprites is deliberate: the repo
- * has one boss texture, and a tint keeps the silhouette identical between
- * the states so the change reads as damage rather than as a different enemy.
+ * These are two palettes over one grid rather than two drawings; see `BOSS`
+ * in `src/art/pixelArt.js` for why. An earlier revision laid a green tint over
+ * purple PNG artwork, which read correctly from a distance and flattened the
+ * shading up close.
  */
-export const BOSS_TINT = { healthy: 0x66ff66, damaged: null };
+export const BOSS_SPRITE = { healthy: 'boss', damaged: 'bossDamaged' };
 
 /**
  * Transform bonus enemies.

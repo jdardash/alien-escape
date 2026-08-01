@@ -5,7 +5,7 @@ A Galaga tribute where the game rules live in pure, dependency-free ES modules t
 ## [Play it in your browser](https://jdardash.github.io/alien-escape/)
 
 [![CI](https://img.shields.io/github/actions/workflow/status/jdardash/alien-escape/ci.yml?branch=main&label=CI)](https://github.com/jdardash/alien-escape/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-129%20passing-success)](tests/)
+[![Tests](https://img.shields.io/badge/tests-244%20passing-success)](tests/)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Build step](https://img.shields.io/badge/build%20step-none-lightgrey)](index.html)
 
@@ -27,14 +27,18 @@ lib/phaser.js         vendored, loaded as a classic script (no CDN dependency)
 src/main.js           Phaser config, scene registration
 src/config.js         tuning constants in one place
 src/systems/          PURE. No Phaser import. Fully unit tested.
-  formation.js        40-slot grid, breathing, sway, world placement
+  formation.js        40-slot grid, breathing, sway, entrance patterns
   paths.js            Bezier entry, dive, return and challenging-stage paths
   flight.js           frame-rate-independent traversal of a path
   scoring.js          score tables, extra-life thresholds
-  stages.js           stage progression, challenging-stage cadence, difficulty
+  stages.js           stage progression, difficulty, transform cycle, rollover
   capture.js          tractor beam capture and rescue state machine
-  persistence.js      high score via injected storage
+  persistence.js      BEST 5 board and high score via injected storage
   stats.js            shots, hits, hit-miss ratio
+  audio.js            the sound manifest and which sound plays when
+src/art/              PURE. Every ship, drawn as a 16 x 16 pixel grid.
+  pixelArt.js         the grids and palettes, plus a strict parser
+  textures.js         the one seam that turns a grid into a Phaser texture
 src/entities/         sprite construction helpers
 src/scenes/           Phaser-aware. Thin orchestration.
   TitleScene.js  GameScene.js  GameOverScene.js
@@ -53,17 +57,22 @@ The scenes still do real work, but it is orchestration: create sprites, read inp
 ## Galaga mechanics implemented
 
 - **40-slot formation**: 4 Boss Galaga, 16 Goei, 20 Zako across five rows of a 10-column grid
-- **Bezier entry flights**: four looping entry choreographies, staggered so a wave streams in and assembles into the grid
+- **Three entrance patterns, one fixed per stage**, each flown as five flights of eight. One of the three is the arcade's both-sides entrance, which pairs its arrivals two to a step while the other two stay single file
 - **Formation breathing and sway**: the grid expands and contracts horizontally while drifting, clamped so the outermost column never leaves the screen
-- **Dive attacks**: enemies peel out of formation along curved runs aimed at the player, exit through the bottom, and re-enter from the top back into their slot
-- **Tractor beam capture**: a Boss Galaga descends, opens a beam, and pulls the fighter in; you lose a life but the ship is held above its captor
-- **Dual fighter rescue**: destroy the captor without hitting your own ship and it docks, giving a double-width fighter with doubled firepower and a four-bullet limit instead of two
-- **Boss Galaga takes two hits**
-- **Challenging Stages** on stage 3 and every fourth stage after: enemies fly scripted patterns, never fire or dive, and clearing all forty pays a perfect bonus
+- **Dive attacks**: enemies peel out of formation along curved runs aimed at the player, exit through the bottom, and re-enter from the top back into their slot. Nothing ever fires from inside the formation, and no more than eight enemy shots exist at once
+- **Tractor beam capture**: a Boss Galaga descends into your half of the field, opens a beam, and pulls the fighter in; you lose a life but the ship is held above its captor
+- **A captive that fights back**: the held ship bombs you on its captor's dive, and if you shoot that captor while it is still in formation the ship breaks loose, swoops at your column, fires once and is gone for good
+- **Dual fighter rescue**: destroy the captor *while it is diving* and the ship docks, giving a double-width fighter with doubled firepower and a four-bullet limit instead of two. The second ship is a real hitbox, so the upgrade is paid for
+- **Boss Galaga takes two hits**, turning from green to purple on the first
+- **Challenging Stages** on stage 3 and every fourth stage after: eight distinct routes, five waves of eight, no firing and no diving, and clearing all forty pays a perfect bonus
+- **Transform bonus enemies** from stage 4: a Zako pulsates and becomes a trio of Scorpions, Bosconian Spy Ships or Galaxian Flagships, priced per set of three
 - **Authentic scoring**: a target is worth more diving than in formation, and a diving boss is worth more again depending on how many Goei escort it down
 - **Extra lives** at the arcade's factory thresholds (20,000, then 70,000, then every 70,000)
-- **Stage flags** in the greedy largest-first denominations the arcade uses
+- **Stage flags** in the greedy largest-first denominations the arcade uses, drawn as flags
+- **The stage counter rolls over**: the stage after 255 is announced as stage 0, exactly as the arcade's single-byte counter does
+- **A BEST 5 board with initials entry**: a run that makes the top five is asked for three initials, and the board survives a reload
 - **Hit-miss ratio** reported at game over, which is what makes the two-bullet limit a scored constraint rather than an annoyance
+- **Per-rank audio**: every rank of enemy has its own cry, a boss surviving its first hit sounds different from one dying, and the gun alternates two samples so a burst does not flatten into a tone
 
 ## Defects found and fixed
 
@@ -83,7 +92,7 @@ These were found by reading the original `GameScene.js` before rewriting it. The
 
 ```bash
 npm install
-npm test        # vitest run  - 129 tests across 8 files
+npm test        # vitest run  - 244 tests across 10 files
 npm run lint    # eslint .
 ```
 
@@ -117,11 +126,13 @@ Because there is no build step, GitHub Pages serves the repository root unchange
 | | |
 | --- | --- |
 | ![Title screen](docs/screenshots/title.png) | ![Formation](docs/screenshots/formation.png) |
-| Title screen | Formation assembled |
+| Title screen with the BEST 5 board | Formation assembled |
 | ![Dive attack](docs/screenshots/dive.png) | ![Tractor beam capture](docs/screenshots/capture.png) |
-| Dive attack | Tractor beam capture |
-| ![Dual fighter](docs/screenshots/dual-fighter.png) | ![Game over](docs/screenshots/gameover.png) |
-| Dual fighter | Results with hit-miss ratio |
+| A boss diving with two Goei escorts | Tractor beam over the fighter |
+| ![Dual fighter](docs/screenshots/dual-fighter.png) | ![Transform bonus](docs/screenshots/transform-bonus.png) |
+| Dual fighter, firing two | A trio of Galaxian Flagships |
+| ![Initials entry](docs/screenshots/name-entry.png) | ![Game over](docs/screenshots/gameover.png) |
+| Initials entry for a top-five run | Results with hit-miss ratio |
 
 ## Built with
 
@@ -143,4 +154,8 @@ Because there is no build step, GitHub Pages serves the repository root unchange
 
 The code in this repository is MIT licensed - see [LICENSE](LICENSE).
 
-Phaser 3, vendored in `lib/`, ships under its own MIT license and its own copyright. The sprites and audio under `assets/` are Galaga-derived and are used here for a non-commercial tribute; they remain the property of their respective owners and are not covered by this repository's license.
+Phaser 3, vendored in `lib/`, ships under its own MIT license and its own copyright.
+
+**The ship artwork is original.** Every fighter, enemy, bonus ship and stage flag is a hand-authored pixel grid in [src/art/pixelArt.js](src/art/pixelArt.js), drawn to the published descriptions of each ship rather than traced from the ROM, and generated as a texture at run time. It is MIT along with the rest of the code. The Galaga-derived enemy PNGs this replaced have been deleted from the working tree, though they remain in this repository's git history.
+
+The **audio** under `assets/sfx/` is Galaga-derived and is used here for a non-commercial tribute; it remains the property of its respective owners and is not covered by this repository's license. The same applies to the remaining loaded images (the starfield, the two projectiles, the explosion and the tractor beam).

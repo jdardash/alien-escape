@@ -10,6 +10,8 @@ import {
   TransformType,
   entrancePatternFor,
   ENTRANCE_PATTERN_COUNT,
+  nextStage,
+  STAGE_ROLLOVER,
 } from '../src/systems/stages.js';
 
 describe('challenging stage cadence', () => {
@@ -225,5 +227,50 @@ describe('stage flags', () => {
 
   it('returns nothing for stage 0', () => {
     expect(stageFlags(0)).toEqual([]);
+  });
+});
+
+describe('the stage counter rolling over', () => {
+  it('counts up normally everywhere below the wrap', () => {
+    expect(nextStage(1)).toBe(2);
+    expect(nextStage(254)).toBe(255);
+  });
+
+  it('announces stage zero after 255, as the arcade does', () => {
+    expect(nextStage(STAGE_ROLLOVER)).toBe(0);
+  });
+
+  it('keeps counting from zero rather than sticking there', () => {
+    expect(nextStage(0)).toBe(1);
+  });
+
+  it('shows no flags for stage zero, because zero needs none', () => {
+    expect(stageFlags(0)).toEqual([]);
+  });
+
+  // Everything a stage decides for itself has to survive the wrap, or the
+  // rollover becomes a crash rather than a curiosity.
+  it('still answers every stage question at zero', () => {
+    expect(isChallengingStage(0)).toBe(false);
+    expect(challengingPatternIndex(0)).toBeNull();
+    expect(transformTypeFor(0)).toBeNull();
+    expect(enemiesFireDuringEntry(0)).toBe(false);
+  });
+
+  it('picks a real entrance pattern for stage zero', () => {
+    const pattern = entrancePatternFor(0);
+    expect(pattern).toBeGreaterThanOrEqual(0);
+    expect(pattern).toBeLessThan(ENTRANCE_PATTERN_COUNT);
+  });
+
+  it('reaches the wrap from any stage by counting', () => {
+    let stage = 250;
+    const seen = [];
+    for (let i = 0; i < 8; i += 1) {
+      stage = nextStage(stage);
+      seen.push(stage);
+    }
+
+    expect(seen).toEqual([251, 252, 253, 254, 255, 0, 1, 2]);
   });
 });

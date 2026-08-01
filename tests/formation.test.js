@@ -13,7 +13,7 @@ import {
   slotWorldPosition,
   clampFormationCentre,
 } from '../src/systems/formation.js';
-import { SCREEN, FORMATION, SPRITE_SCALE, SPRITE_SOURCE_PX } from '../src/config.js';
+import { SCREEN, FORMATION, SHIP_DRAWN_PX } from '../src/config.js';
 
 describe('formation layout', () => {
   it('assembles exactly 40 enemies, as Galaga does', () => {
@@ -265,7 +265,7 @@ describe('keeping the formation on screen', () => {
  * to fit a 672-wide portrait one at its widest breath and furthest sway.
  */
 describe('the formation on the real field', () => {
-  const spriteHalfWidth = (SPRITE_SCALE.boss * SPRITE_SOURCE_PX) / 2;
+  const spriteHalfWidth = SHIP_DRAWN_PX / 2;
 
   const widestExtremes = (swayX) => {
     const breathScale = 1 + FORMATION.breathAmplitude;
@@ -305,7 +305,7 @@ describe('the formation on the real field', () => {
   });
 
   it('spaces columns wider than the sprites drawn in them', () => {
-    // Anything tighter than a boss's display width shows as a solid block of
+    // Anything tighter than a ship's display width shows as a solid block of
     // overlapping ships rather than a grid, and the grid is at its tightest at
     // peak exhale.
     const tightest = FORMATION.spacingX * (1 - FORMATION.breathAmplitude);

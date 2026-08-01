@@ -28,10 +28,12 @@ graph TD
         CAP["capture.js"]
         PERS["persistence.js"]
         STATS["stats.js"]
+        AUDIO["audio.js"]
+        ART["art/pixelArt.js<br/>every ship, as a pixel grid"]
     end
 
     subgraph tests["tests/ - vitest, headless"]
-        T["8 test files, 129 tests"]
+        T["10 test files, 244 tests"]
     end
 
     HTML --> MAIN
@@ -314,16 +316,18 @@ npm test        # vitest run
 npm run lint    # eslint .
 ```
 
-129 tests across 8 files, one per pure module. Roughly:
+244 tests across 10 files, one per pure module. Roughly:
 
 | File | Tests | Focus |
 | --- | --- | --- |
+| `tests/persistence.test.js` | 46 | The BEST 5 board: ranking, ties, insertion, initials, corrupt values, missing keys, throwing storage, memory fallback |
+| `tests/stages.test.js` | 39 | Challenging-stage cadence, difficulty ramp and plateau, entrance patterns, the transform cycle, flag denominations, the 255 rollover |
+| `tests/formation.test.js` | 31 | Slot counts and types, grid-to-world placement, breathing phase, centre clamping, entry-flight grouping |
+| `tests/capture.test.js` | 29 | State transitions, ignored events, reset, bullet limit, the rescue rule, whether a captive may bomb |
 | `tests/paths.test.js` | 26 | Bezier evaluation, segment-boundary continuity, tangent behaviour, path endpoints, the entry-floor invariant |
-| `tests/formation.test.js` | 23 | Slot counts and types, grid-to-world placement, breathing phase, centre clamping, entry-flight grouping |
-| `tests/stages.test.js` | 19 | Challenging-stage cadence, difficulty ramp and plateau, flag denominations |
-| `tests/scoring.test.js` | 16 | Formation vs diving values, boss escort multipliers, extra-life thresholds |
-| `tests/capture.test.js` | 14 | State transitions, ignored events, reset, bullet limit |
-| `tests/persistence.test.js` | 13 | Corrupt values, missing keys, throwing storage, memory fallback |
+| `tests/pixelArt.test.js` | 24 | Grid parsing, ship sizes, centre-line symmetry, distinct silhouettes, recolours that stay pixel-identical |
+| `tests/scoring.test.js` | 19 | Formation vs diving values, boss escort multipliers, transform sets, extra-life thresholds |
+| `tests/audio.test.js` | 12 | Per-rank death sounds, the alternating gun, and that every file on disk is wired |
 | `tests/flight.test.js` | 11 | Delta accumulation, clamping at completion, transform output |
 | `tests/stats.test.js` | 7 | Ratio math, zero-shot case, formatting |
 
@@ -336,6 +340,8 @@ Test style follows the modules: plain values in, assertions on returned values. 
 ### What is not covered, and why
 
 **Phaser rendering.** Asserting that a sprite drew at a given pixel needs a browser harness, a canvas, and a screenshot baseline. That machinery would test Phaser, not this project, and it would need maintaining every time an asset changed. The value in this codebase is in the rules, so the rules are what is covered.
+
+The artwork is the interesting exception. Because every ship is a pixel grid in `src/art/pixelArt.js` rather than a PNG, the things that actually go wrong with hand-edited sprites are testable without a canvas: `tests/pixelArt.test.js` asserts each ship is symmetric about its centre line, that the four ranks have four different silhouettes, and that a recolour such as the damaged Boss Galaga is pixel-identical to the ship it recolours. What is untested is only the final step, `src/art/textures.js`, which is the one place a grid meets Phaser.
 
 **The scenes themselves.** They are untested by design, which is precisely why the boundary is enforced: the smaller the orchestration layer, the less that untested surface matters. Scene methods are kept to sprite construction, collision registration, timer scheduling, and HUD text. When a scene method starts to contain a rule, that rule belongs in `src/systems/`.
 

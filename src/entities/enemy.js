@@ -6,9 +6,9 @@
  * this file owns the sprite that shows it.
  */
 
-import { BOSS_TINT, ENEMY_HEALTH, ENEMY_TEXTURE, SPRITE_SCALE } from '../config.js';
+import { BOSS_SPRITE, ENEMY_HEALTH } from '../config.js';
 import { EnemyType } from '../systems/formation.js';
-import { transformTextureKey } from '../art/textures.js';
+import { shipTextureKey, transformTextureKey } from '../art/textures.js';
 
 /** Enemies are either sitting in formation, flying a path, or gone. */
 export const EnemyMode = {
@@ -20,11 +20,18 @@ export const EnemyMode = {
   PASSING: 'passing',
 };
 
+/**
+ * One enemy sprite, drawn from the pixel art for its rank.
+ *
+ * Every rank shares a texture key with its `EnemyType`, so a formation slot
+ * maps to its artwork directly. Drawn at scale 1: the textures are generated at
+ * exactly their screen size and scaling them would resample the pixels they
+ * were authored to keep.
+ */
 export function createEnemy(scene, group, slot, position) {
-  const texture = ENEMY_TEXTURE[slot.type];
-  const scale = slot.type === EnemyType.BOSS ? SPRITE_SCALE.boss : SPRITE_SCALE.enemy;
+  const sprite = slot.type === EnemyType.BOSS ? BOSS_SPRITE.healthy : slot.type;
 
-  const enemy = group.create(position.x, position.y, texture).setScale(scale).setOrigin(0.5);
+  const enemy = group.create(position.x, position.y, shipTextureKey(sprite)).setOrigin(0.5);
 
   enemy.body.setSize(enemy.width * 0.62, enemy.height * 0.62, true);
   enemy.body.setAllowGravity(false);
@@ -36,20 +43,18 @@ export function createEnemy(scene, group, slot, position) {
   enemy.flight = null;
   enemy.hasBombed = false;
 
-  if (slot.type === EnemyType.BOSS) enemy.setTint(BOSS_TINT.healthy);
-
   return enemy;
 }
 
 /**
  * Show that a Boss Galaga has taken its first of two hits.
  *
- * Clearing the tint rather than setting a new one is what reveals the purple
- * artwork underneath; see `BOSS_TINT` for why the damaged state is a removal.
+ * A swap to the damaged palette rather than a tint over the healthy one. Both
+ * textures come from the same grid, so the silhouette does not move by a pixel
+ * and the change reads as damage rather than as a different enemy.
  */
 export function showBossDamage(enemy) {
-  if (BOSS_TINT.damaged === null) enemy.clearTint();
-  else enemy.setTint(BOSS_TINT.damaged);
+  enemy.setTexture(shipTextureKey(BOSS_SPRITE.damaged));
 }
 
 /** True when a target is outside formation and therefore worth more. */
