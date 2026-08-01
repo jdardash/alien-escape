@@ -8,6 +8,8 @@ import {
   CHALLENGING_PATTERN_COUNT,
   transformTypeFor,
   TransformType,
+  entrancePatternFor,
+  ENTRANCE_PATTERN_COUNT,
 } from '../src/systems/stages.js';
 
 describe('challenging stage cadence', () => {
@@ -117,6 +119,41 @@ describe('challenging stage patterns', () => {
       const index = challengingPatternIndex(stage);
       expect(index).toBeGreaterThanOrEqual(0);
       expect(index).toBeLessThan(CHALLENGING_PATTERN_COUNT);
+    }
+  });
+});
+
+describe('entrance patterns', () => {
+  it('offers the three patterns the arcade has', () => {
+    expect(ENTRANCE_PATTERN_COUNT).toBe(3);
+  });
+
+  it('fixes one pattern for the whole of a stage', () => {
+    // The property that matters: asking twice for the same stage is the same
+    // answer, so every flight in a wave can be built from one pattern.
+    for (let stage = 1; stage <= 40; stage += 1) {
+      expect(entrancePatternFor(stage)).toBe(entrancePatternFor(stage));
+    }
+  });
+
+  it('keeps the pattern in range for any stage', () => {
+    for (let stage = 1; stage <= 300; stage += 1) {
+      const pattern = entrancePatternFor(stage);
+      expect(Number.isInteger(pattern)).toBe(true);
+      expect(pattern).toBeGreaterThanOrEqual(0);
+      expect(pattern).toBeLessThan(ENTRANCE_PATTERN_COUNT);
+    }
+  });
+
+  it('cycles all three rather than favouring one', () => {
+    const seen = new Set();
+    for (let stage = 1; stage <= 12; stage += 1) seen.add(entrancePatternFor(stage));
+    expect(seen.size).toBe(ENTRANCE_PATTERN_COUNT);
+  });
+
+  it('changes pattern from one stage to the next', () => {
+    for (let stage = 1; stage <= 40; stage += 1) {
+      expect(entrancePatternFor(stage)).not.toBe(entrancePatternFor(stage + 1));
     }
   });
 });

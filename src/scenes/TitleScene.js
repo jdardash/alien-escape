@@ -5,6 +5,7 @@ import {
   SPRITE_SCALE,
 } from '../config.js';
 import { resolveStorage, loadHighScore } from '../systems/persistence.js';
+import { SOUND_FILES } from '../systems/audio.js';
 
 export class TitleScene extends Phaser.Scene {
   constructor() {
@@ -14,6 +15,13 @@ export class TitleScene extends Phaser.Scene {
   preload() {
     this.load.image('background', 'assets/images/background_tiled_vertical.png');
     this.load.image('titlePlayer', 'assets/images/mainship.png');
+
+    // Loaded here as well as in GameScene: Phaser caches by key, so this is a
+    // no-op the second time, and it means the attract screen has the theme
+    // available on the very first frame.
+    for (const [key, path] of Object.entries(SOUND_FILES)) {
+      this.load.audio(key, path);
+    }
   }
 
   create() {
@@ -23,6 +31,12 @@ export class TitleScene extends Phaser.Scene {
       .setTileScale(BACKGROUND_TILE_SCALE);
 
     const highScore = loadHighScore(resolveStorage(globalThis.localStorage));
+
+    // The attract screen has the theme under it, as the cabinet does. It is
+    // stopped rather than left running when the game starts, so the opening
+    // stage is played over the low ambient pulse instead of over music.
+    this.theme = this.sound.add('theme');
+    this.theme.play({ volume: 0.4, loop: true });
 
     this.add
       .text(SCREEN.width / 2, 110, 'HIGH SCORE', {
@@ -88,7 +102,13 @@ export class TitleScene extends Phaser.Scene {
       repeat: -1,
     });
 
-    this.input.keyboard.once('keydown-SPACE', () => this.scene.start('GameScene'));
+    this.input.keyboard.once('keydown-SPACE', () => {
+      // Coin, then the start jingle, then the game -- the cabinet's own order.
+      this.theme.stop();
+      this.sound.play('coin', { volume: 0.5 });
+      this.sound.play('gameStart', { volume: 0.5 });
+      this.time.delayedCall(600, () => this.scene.start('GameScene'));
+    });
   }
 
   update() {

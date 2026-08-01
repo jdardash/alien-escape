@@ -9,8 +9,9 @@
  */
 
 import { CHALLENGING_PATTERN_COUNT } from './paths.js';
+import { ENTRANCE_PATTERN_COUNT } from './formation.js';
 
-export { CHALLENGING_PATTERN_COUNT };
+export { CHALLENGING_PATTERN_COUNT, ENTRANCE_PATTERN_COUNT };
 
 /** Stage 3, then 7, 11, 15, and so on. */
 export function isChallengingStage(stage) {
@@ -41,6 +42,25 @@ export function enemiesFireDuringEntry(stage) {
 export function challengingPatternIndex(stage) {
   if (!isChallengingStage(stage)) return null;
   return Math.floor((stage - 3) / 4) % CHALLENGING_PATTERN_COUNT;
+}
+
+/**
+ * Which of the three entrance patterns this stage's wave flies in on.
+ *
+ * The sourced rule is that the pattern is *fixed per stage*: all five flights
+ * of a wave belong to one pattern, and there are three of them. Which stage
+ * draws which is the part that could not be sourced, so the cycle here is the
+ * simplest assignment that satisfies the rule -- one pattern per stage, in
+ * order, repeating every third stage. That gives a player a different entrance
+ * on consecutive stages and the same entrance on a stage they have seen
+ * before, which is the behaviour the fixedness exists to produce.
+ *
+ * Every stage has one, including a Challenging Stage, which simply never asks:
+ * a bonus round has no formation to assemble.
+ */
+export function entrancePatternFor(stage) {
+  const index = (stage - 1) % ENTRANCE_PATTERN_COUNT;
+  return index < 0 ? index + ENTRANCE_PATTERN_COUNT : index;
 }
 
 /**

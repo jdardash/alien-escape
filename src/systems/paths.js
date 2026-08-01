@@ -411,6 +411,39 @@ export function challengingPath(pattern, offset, screen) {
   }
 }
 
+/**
+ * The run a captured fighter makes when its captor dies in formation.
+ *
+ * Shooting the boss while it sits in the grid does not hand the ship back. The
+ * freed captive "will swoop down on you... it will disappear off the bottom of
+ * the screen and go away": one last attack run, aimed at the player, and then
+ * it is gone for the rest of the game. Making it fall straight down instead,
+ * as an earlier revision did, removed the only cost of taking the wrong shot.
+ *
+ * Shaped as a break-away rather than a dive: the first segment banks away from
+ * the player before committing, which reads as the ship coming loose, and the
+ * second drops down the player's own column so the swoop has to be dodged.
+ */
+export function captiveEscapePath(origin, playerX, screen) {
+  const { height } = screen;
+  const drift = playerX - origin.x;
+
+  return [
+    [
+      { x: origin.x, y: origin.y },
+      { x: origin.x - drift * 0.25, y: origin.y + height * 0.1 },
+      { x: origin.x + drift * 0.35, y: height * 0.55 },
+      { x: origin.x + drift * 0.7, y: height * 0.66 },
+    ],
+    [
+      { x: origin.x + drift * 0.7, y: height * 0.66 },
+      { x: playerX, y: height * 0.78 },
+      { x: playerX, y: height * 0.9 },
+      { x: playerX, y: height + 80 },
+    ],
+  ];
+}
+
 /** Re-entry from the top of the screen back into a formation slot. */
 export function returnPath(target, screen) {
   const { width } = screen;

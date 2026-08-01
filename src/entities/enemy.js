@@ -8,6 +8,7 @@
 
 import { BOSS_TINT, ENEMY_HEALTH, ENEMY_TEXTURE, SPRITE_SCALE } from '../config.js';
 import { EnemyType } from '../systems/formation.js';
+import { transformTextureKey } from '../art/textures.js';
 
 /** Enemies are either sitting in formation, flying a path, or gone. */
 export const EnemyMode = {
@@ -78,19 +79,15 @@ export function canBeginDive(enemy) {
  * how the completed-set bonus is detected: each kill decrements the one
  * object, and the third kill is the one that pays.
  */
-export function createTransformEnemy(scene, group, art, position, set) {
+export function createTransformEnemy(scene, group, type, position, set) {
+  // Drawn at scale 1: the texture is pixel art generated at exactly its screen
+  // size, and scaling it would resample the pixels it was authored to keep.
+  // The previous version drew a borrowed silhouette flattened with
+  // `setTintFill`, which made a Scorpion and a Flagship the same shape.
   const enemy = group
-    .create(position.x, position.y, art.texture)
-    .setScale(SPRITE_SCALE.enemy)
+    .create(position.x, position.y, transformTextureKey(type))
     .setOrigin(0.5);
 
-  // Fill rather than multiply. A multiply tint takes its result from whatever
-  // the source pixels already are, so yellow over the blue Zako came out a
-  // muddy green and the "yellow Scorpion" the sources describe was not yellow
-  // at all. Filling flattens the sprite to the stated colour and keeps only
-  // the silhouette, which is the right trade for a stand-in: the shape still
-  // reads as a ship and the colour is the part that carries the meaning.
-  enemy.setTintFill(art.tint);
   enemy.body.setSize(enemy.width * 0.62, enemy.height * 0.62, true);
   enemy.body.setAllowGravity(false);
 

@@ -23,6 +23,11 @@ export class GameOverScene extends Phaser.Scene {
   create() {
     this.add.rectangle(0, 0, SCREEN.width, SCREEN.height, 0x000000).setOrigin(0);
 
+    // The cabinet plays a different tune depending on whether the run earned a
+    // place on the board, which is the reward the results screen exists for.
+    const beatRecord = this.finalScore > 0 && this.finalScore >= this.highScore;
+    this.sound.play(beatRecord ? 'highScoreEntry' : 'gameOverTune', { volume: 0.5 });
+
     this.add
       .text(SCREEN.width / 2, 170, 'GAME OVER', {
         font: '46px monospace',
@@ -30,7 +35,6 @@ export class GameOverScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    const beatRecord = this.finalScore > 0 && this.finalScore >= this.highScore;
     if (beatRecord) {
       const banner = this.add
         .text(SCREEN.width / 2, 232, 'NEW HIGH SCORE', {

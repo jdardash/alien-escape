@@ -6,8 +6,10 @@ Namco's 1981 arcade *Galaga*, plus a comparison against public open-source Galag
 
 **Status.** This began as a gap analysis. Every gap it identified has since been
 addressed, so the table below records the *current* state and section 2 records what was
-changed and what is still approximate. Two items remain genuinely unfinished and are
-listed under "What is still not authentic"; nothing else in the audit is outstanding.
+changed and what is still approximate. The three items that were still outstanding in the
+first revision -- per-flight entrance patterns, an inert captive, and stand-in art -- have
+since been closed as well; what is left under "What is still not authentic" is narrower
+than any of them and is listed honestly there.
 
 ## How to read the citations
 
@@ -55,14 +57,16 @@ Primary directly-fetched sources:
 | Fire-rate gate | None beyond the bullet limit and shot lifetime — a shot that hits frees its slot immediately ([Steam community guide](https://steamcommunity.com/sharedfiles/filedetails/?id=2926871061)) | Bullet limit only; the 180 ms cooldown was removed (`GameScene.fire`) | matches |
 | When enemies fire | "Enemies only drop bombs while they arrive or while they are in a dive; they do not drop bombs while in formation." ([Academic Kids](https://academickids.com/encyclopedia/index.php/Galaga)) | Bombing gated on `DIVING`/`ENTERING` only; no formation fire timer exists (`GameScene.advanceEnemyFlight`) | matches |
 | Max enemy shots on screen | 8 hardware sprites reserved for enemy shots ([Set Side B](https://setsideb.com/the-no-fire-trick-in-galaga/)) | 8 (`DIVE.maxBombs`, enforced in `GameScene.fireEnemyBullet`) | matches |
-| Entry to formation | "At the beginning of each level, the enemies arrive in five groups of eight enemies each" ([Academic Kids](https://academickids.com/encyclopedia/index.php/Galaga)); three distinct entrance patterns, fixed per stage ([StrategyWiki Walkthrough, snippet](https://strategywiki.org/wiki/Galaga/Walkthrough)) | Five flights of eight, single file, each flight on one shared curve and gated behind the previous one (`buildEntryGroups`, `GameScene.launchFormation`). The entrance pattern varies per *flight* rather than being fixed per *stage* | partly |
+| Entry to formation | "At the beginning of each level, the enemies arrive in five groups of eight enemies each" ([Academic Kids](https://academickids.com/encyclopedia/index.php/Galaga)); three distinct entrance patterns, fixed per stage ([StrategyWiki Walkthrough, snippet](https://strategywiki.org/wiki/Galaga/Walkthrough)) | Five flights of eight, gated behind one another, all five drawn from the one pattern `entrancePatternFor(stage)` assigns to that stage (`stages.js`, `buildEntryGroups(pattern)`, `GameScene.launchFormation`). Which stage draws which pattern is an assumption; see the remainder list | matches |
+| The first entrance pattern | "the only pattern where enemies will enter from both sides of the screen at the same time, with enemies entering single file in short rows" ([StrategyWiki Walkthrough, snippet](https://strategywiki.org/wiki/Galaga/Walkthrough)) | Pattern 0 alone launches paired members, one from each side per step; the other two are single file, one curve per flight. `tests/formation.test.js` asserts exactly one pattern has this property | matches |
 | Divers return to formation | Survivors exit and re-enter to rejoin the grid | Same (`GameScene.js:743-750`) | matches |
 | Formation motion | Formation sways and "throbs like a living thing" ([Retro Game Deconstruction Zone](https://www.retrogamedeconstructionzone.com/2020/05/metamorphosis-from-galaxian-to-galaga.html)) | Sinusoidal breathe plus sway (`formation.js:73-84`) | matches (qualitatively) |
 | Tractor beam trigger | A Boss Galaga "peels off and dives straight down in a markedly different pattern from the usual one-loop off the side, stops two inches above the bottom of the screen", then the beam fans downward ([StrategyWiki Walkthrough, snippet](https://strategywiki.org/wiki/Galaga/Walkthrough)) | Boss descends low into the player's half and opens the beam there; "FIGHTER CAPTURED" banner on success (`CAPTURE` in `config.js`, `GameScene.attemptCapture`) | matches |
 | Capture cost | Costs the player a life ([Wikipedia](https://en.wikipedia.org/wiki/Galaga)) | `loseLife()` on capture complete (`GameScene.js:493`) | matches |
 | Capture on last ship | Game over ([search corroboration](https://tvtropes.org/pmwiki/pmwiki.php/VideoGame/Galaga)) | Game over via `loseLife()` -> `endGame()` (`GameScene.js:605-612`) | matches |
 | Rescue condition | Must destroy the captor **while it is diving**, not while it sits in formation; killing it in formation loses the captive, which then dives at the player ([StrategyWiki Walkthrough, snippet](https://strategywiki.org/wiki/Galaga/Walkthrough)) | `resolveCaptorDestroyed(state, isDiving(captor))` decides; killing it in formation runs `loseCaptive` (`capture.js`, `GameScene.onEnemyHit`) | matches |
-| Captive behaviour while held | Joins the enemy side and attacks | Has a physics body and can be shot, but does not attack; when lost it falls away rather than diving at the player (`GameScene.loseCaptive`) | partly |
+| Captive behaviour while held | Joins the enemy side and attacks | Rides its captor and bombs the player on the captor's dive, at the same release point in the run the captor uses (`captiveCanBomb`, `GameScene.updateCaptive`) | matches |
+| Captive after its captor dies in formation | "eventually the captured Fighter will swoop down on you... it will disappear off the bottom of the screen and go away" ([StrategyWiki Walkthrough, snippet](https://strategywiki.org/wiki/Galaga/Walkthrough)) | Flies `captiveEscapePath`: breaks away, converges on the player's column, fires once, and exits the bottom. It can ram the player on the way (`GameScene.advanceCaptiveEscape`) | matches |
 | Shooting your own captive | 1,000 points, captive lost for good ([StrategyWiki Walkthrough, snippet](https://strategywiki.org/wiki/Galaga/Walkthrough)) | 1,000 and permanently lost, via a `bullets`/`captives` overlap into `GameScene.onCaptiveShot`, which drives the `CAPTIVE_DESTROYED` transition | matches |
 | Dual fighter firepower | Two shots at a time, four on screen ([Data Driven Gamer](https://datadrivengamer.blogspot.com/2019/07/game-78-galaga.html)) | Two shots, limit 4 (`GameScene.js:799-802`, `capture.js:116`) | matches |
 | Dual fighter drawback | "doubles your chances of getting hit" — wider target ([Data Driven Gamer](https://datadrivengamer.blogspot.com/2019/07/game-78-galaga.html)) | The second ship is a physics sprite in its own `wingman` group with its own overlaps against enemies and bombs (`GameScene.dockCaptive`, `GameScene.registerCollisions`) | matches |
@@ -75,9 +79,12 @@ Primary directly-fetched sources:
 | Challenging stage per-wave bonus | A per-wave bonus for clearing all eight of a wave is asserted by one snippet source but the value could not be confirmed | none | **unverified** |
 | Challenging stage: enemies never fire, never dive | Correct — "aliens fly in a preset formation without firing at the player" ([Wikipedia](https://en.wikipedia.org/wiki/Galaga)) | Correct; player also cannot be hit by contact (`GameScene.js:202`) | matches |
 | Distinct challenging stage patterns | Eight; they repeat after stage 31 ([StrategyWiki Walkthrough, snippet](https://strategywiki.org/wiki/Galaga/Walkthrough); corroborated by [Retro Game Deconstruction Zone](https://www.retrogamedeconstructionzone.com/2020/05/metamorphosis-from-galaxian-to-galaga.html): "eight distinct bonus rounds, the last of which won't be seen until you pass stage 30") | Eight (`CHALLENGING_PATTERN_COUNT`, `paths.js`), wrapped in `challengingPatternIndex` so stage 35 returns to pattern 0 | matches |
-| Transform bonus enemies | From stage 4, a Zako pulsates and transforms into a trio: yellow Scorpions worth 1,000 (stages 4-6), green Bosconian Spy Ships worth 2,000 (8-10), Galaxian Flagships worth 3,000 (12-14), then repeating ([StrategyWiki Walkthrough, snippet](https://strategywiki.org/wiki/Galaga/Walkthrough); flagship value corroborated at [Namco Wiki](https://namco.fandom.com/wiki/Galaxian_Flagship)) | Full cycle implemented: `transformTypeFor` (`stages.js`) and `transformSetPoints` (`scoring.js`), priced per set of three. Silhouettes borrow existing enemy art under a flat colour fill | matches (art approximated) |
+| Transform bonus enemies | From stage 4, a Zako pulsates and transforms into a trio: yellow Scorpions worth 1,000 (stages 4-6), green Bosconian Spy Ships worth 2,000 (8-10), Galaxian Flagships worth 3,000 (12-14), then repeating ([StrategyWiki Walkthrough, snippet](https://strategywiki.org/wiki/Galaga/Walkthrough); flagship value corroborated at [Namco Wiki](https://namco.fandom.com/wiki/Galaxian_Flagship)) | Full cycle implemented: `transformTypeFor` (`stages.js`) and `transformSetPoints` (`scoring.js`), priced per set of three. Each type has its own 16 x 16 pixel-art sprite, authored in `src/art/pixelArt.js` and generated as a texture at run time | matches (art original, not the ROM's) |
 | Stage flag denominations | 1, 5, 10, 20, 30, 50, combined greedily — stage 99 shows 50+30+10+5+four 1s ([StrategyWiki Gameplay, snippet](https://strategywiki.org/wiki/Galaga/Gameplay); independently corroborated by the `StageBadges` tuple `stage_1 stage_5 stage_10 stage_20 stage_30 stage_50` in [ihalseide/Galaga `source/constants.py`](https://github.com/ihalseide/Galaga/blob/master/source/constants.py)) | Same six values, greedy largest-first (`stages.js:70-91`) | matches |
-| Stage flags drawn as flags | Yes, sprite flags | Pole-and-banner flag textures generated at run time, one colour per denomination (`FLAG_ART` in `config.js`, `GameScene.createFlagTextures`) | matches (art approximated) |
+| Stage flags drawn as flags | Yes, sprite flags | Six pixel-art pennants, one per denomination, each with its own colour *and* its own banner motif so they stay countable in greyscale (`FLAG_MOTIFS` in `src/art/pixelArt.js`, `createFlagTextures`) | matches (art original, not the ROM's) |
+| Enemy hit sounds | Each rank of enemy has its own cry, and a Boss Galaga surviving its first hit sounds different from one dying | `deathSoundFor` picks per `EnemyType`, with a separate boss-stricken sound for the survived hit (`src/systems/audio.js`, `GameScene.destroyEnemy` / `onEnemyHit`) | matches |
+| Player gun sound | Two alternating shot samples | `playerShotSound` alternates per trigger pull, so a dual fighter firing two at once does not lock to one sample | matches |
+| Sounds in use | The cabinet is noisy: theme, coin, start jingle, dive, bomb, beam, capture, rescue, transform fanfare, extend chime, challenging-stage stings, death tune, a background pulse | 27 of the repo's 28 sound files are wired to those events (`SOUND_FILES`). Before this pass, 7 were | matches |
 | End-of-game results | Shots fired, number of hits, hit-miss ratio ([Data Driven Gamer](https://datadrivengamer.blogspot.com/2019/07/game-78-galaga.html)) | All three (`GameOverScene.js:61-68`, `stats.js`) | matches |
 | Display | 288 x 224 at 60.606 Hz, **vertical** orientation ([PixelatedArcade](https://pixelatedarcade.com/games/galaga/techspecs)) | 672 x 864 portrait (`config.js`) — exactly the cabinet's 7:9 ratio, scaled up for a browser | matches |
 | Stage 255 rollover | Next stage announced as stage zero ([Wikipedia](https://en.wikipedia.org/wiki/Galaga)) | Not modelled; stage counts up indefinitely | missing (out of scope) |
@@ -85,22 +92,28 @@ Primary directly-fetched sources:
 
 **Headline:** every number in the scoring table, the extra-life ladder, the formation
 layout, the challenging-stage cadence, the flag denominations and the bullet limit is
-correct, and so is the choreography built on top of them: grouped entry waves,
-dive-only enemy fire, a low tractor beam, the diving-captor rescue rule, the eight
-challenging patterns and the transform bonus cycle.
+correct, and so is the choreography built on top of them: one fixed entrance pattern per
+stage flown as five flights of eight, dive-only enemy fire, a low tractor beam, the
+diving-captor rescue rule, a captive that fights for the other side, the eight
+challenging patterns, the transform bonus cycle, and per-rank enemy audio.
 
 **What is still not authentic**, and is the honest remainder of this audit:
 
-- **Entrance patterns are per-flight, not per-stage.** The arcade fixes one of three
-  entrance patterns per stage; here the pattern varies between the five flights within
-  a stage. The five-groups-of-eight structure is right, the assignment is not.
-- **A held captive does not attack.** It can be shot, and shooting it pays the 1,000
-  and loses it for good. But while held it rides its captor inertly, and when lost it
-  falls away rather than diving at the player.
-- **Three sprites are stand-ins.** Transform bonus enemies and stage flags are drawn
-  from existing art -- a flat colour fill over a borrowed silhouette, and a generated
-  pole-and-banner respectively -- because the repo has no artwork for them. Colour,
-  cadence, cycle order and scoring are authentic; the silhouettes are not.
+- **Which stage flies which entrance pattern is an assumption.** That there are three
+  patterns and that one is fixed for the whole of a stage is sourced and is now how the
+  code works; the specific stage-to-pattern mapping is not sourced anywhere that could
+  be found, so `entrancePatternFor` cycles them in order. A player who knows the arcade
+  would see the right *kind* of entrance, not necessarily the right one for stage 7.
+- **The artwork is original, not the arcade's.** The Scorpion, Spy Ship, Flagship and
+  the six flags are hand-authored 16 x 16 and 10 x 12 pixel grids in
+  `src/art/pixelArt.js`, drawn to the published descriptions of each ship: a yellow
+  scorpion, a green Bosconian station, a blue Galaxian flagship with red wingtips. They
+  are not traced from the ROM and are not claimed to match it pixel for pixel. The same
+  is true of the flag colours, which could not be sourced -- which is why each
+  denomination also carries its own banner motif rather than relying on colour alone.
+- **One sound file is unused.** `miss.mp3` has no event that fits it; playing something
+  on every missed shot would be noise, not fidelity. `kill.mp3` survives as the generic
+  burst for things that are not one of the three ranked enemies.
 
 Also deliberately absent: the stage-255 rollover, and the "no-fire" bug (see the last
 row of the table for why that one stays out).
@@ -386,10 +399,12 @@ The clones surveyed, with what was actually inspected:
 Against that field, three things here are genuinely unusual.
 
 **1. Game rules are a pure, dependency-free layer with real coverage.**
-`src/systems/` is eight modules that import nothing from Phaser, and `tests/` is 153
-`it()` cases across eight files (`capture` 23, `flight` 11, `formation` 27, `paths` 26,
-`persistence` 13, `scoring` 19, `stages` 27, `stats` 7). Four of the five clones above have
-no tests at all; the fifth has one. This is not a marginal difference in degree.
+`src/systems/` plus `src/art/pixelArt.js` is ten modules that import nothing from Phaser,
+and `tests/` is 192 `it()` cases across ten files (`audio` 8, `capture` 29, `flight` 11,
+`formation` 31, `paths` 26, `persistence` 13, `pixelArt` 16, `scoring` 19, `stages` 32,
+`stats` 7). Four of the five clones above have no tests at all; the fifth has one. This is
+not a marginal difference in degree. It extends to the artwork: because the sprites are
+data rather than PNGs, "is this ship symmetric" is a unit test rather than a squint.
 
 **2. The scoring table is actually correct.** This matters more than it sounds. The most
 complete pygame clone in the list, `ihalseide/Galaga`, awards a flat 400 for both Bee and
@@ -432,23 +447,68 @@ much less painful to author.
 
 ---
 
-## 4. Overall verdict
+## 4. What the second pass closed
 
-The numbers were right from the start and the choreography has since caught up. Every
+The first revision of this report ended with three admitted gaps. All three are now
+closed, each the same way: put the rule in a pure module, test it there, and leave the
+scene doing nothing but Phaser.
+
+**Entrance patterns are fixed per stage.** `entrancePatternFor(stage)` in
+`src/systems/stages.js` picks one of three, and `buildEntryGroups(pattern)` builds all
+five flights from it. Each flight member now carries the curve it flies and its `step` in
+the launch order, which is what lets the first pattern -- the sourced "only pattern where
+enemies enter from both sides at the same time" -- pair its members two to a step while
+the other two stay single file. `assemblyDurationMs` reads the last step off the groups
+rather than assuming eight, so the paired pattern's shorter assembly is not padded.
+Six tests in `tests/formation.test.js` pin the shapes, including that exactly one of the
+three enters from both sides at once.
+
+**The captive fights.** `captiveCanBomb(state, captorIsDiving)` in `capture.js` is the
+rule; the scene rearms the held ship when its captor begins a dive and fires at the same
+point of the run the captor bombs from, so the pair of shots arrives together. When the
+captor is shot down *in formation* the captive no longer drops off the screen: it flies
+`captiveEscapePath` -- break away, converge on the player's column, one shot, out through
+the bottom -- and can ram the player on the way. That is what makes taking the wrong shot
+at a captor cost something beyond the forfeited rescue.
+
+**The artwork is drawn, not borrowed.** `src/art/pixelArt.js` holds hand-authored pixel
+grids and a strict parser; `src/art/textures.js` turns them into NEAREST-filtered
+textures at run time. The three transform ships are 16 x 16, the size the arcade's own
+sprites are, and are generated at exactly their drawn size so nothing is resampled. The
+six flags are 10 x 12 pennants with per-denomination motifs. Because the art is data, it
+is testable: `tests/pixelArt.test.js` asserts every ship is symmetric about its centre
+line, which is the failure mode of hand-edited pixel grids, and that no two types share a
+silhouette.
+
+**And one gap the first pass never listed: the game was almost silent.** The repo shipped
+28 sound files and used seven. The Boss Galaga's cry, the two alternating fighter shots,
+the transform fanfare, the extra-life chime, the challenging-stage stings, the title
+theme, the coin, the start jingle, the death tune and the background pulse were all
+present and unreferenced. `src/systems/audio.js` is now the manifest and the selection
+rules -- `deathSoundFor` gives each rank its own cry and distinguishes a boss surviving
+its first hit from one dying, `playerShotSound` alternates per trigger pull -- and
+`tests/audio.test.js` asserts the selection rules can never name a sound the manifest does
+not load. 27 of the 28 files are wired.
+
+## 5. Overall verdict
+
+The numbers were right from the start and everything else has since caught up. Every
 constant that can be looked up in a strategy guide — scoring, extra lives, formation
 composition, challenging-stage cadence, flag denominations, bullet limits, boss hit
 points — is authentic and unit tested, and so are the behaviours that were originally
-missing: five-flight entry, dive-only bombing, an eight-bomb ceiling, a low tractor
-beam, the diving-captor rescue rule, a shootable captive, a dual fighter that is a real
-target, eight challenging patterns in five waves of eight, and the Scorpion / Spy Ship
-/ Flagship transform cycle priced per set of three.
+missing: a fixed entrance pattern per stage flown as five flights of eight, dive-only
+bombing, an eight-bomb ceiling, a low tractor beam, the diving-captor rescue rule, a
+captive that bombs on its captor's dive and swoops at the player when it is lost, a dual
+fighter that is a real target, eight challenging patterns in five waves of eight, the
+Scorpion / Spy Ship / Flagship transform cycle priced per set of three, and per-rank
+enemy audio over a background pulse.
 
-What remains is listed at the end of section 1 and is narrow: entrance patterns vary
-per flight rather than per stage, a held captive does not attack, and three sprites are
-stand-ins for artwork the repo does not have. None of those is a rule error; all three
-are either an assignment detail or missing art.
+What remains is listed at the end of section 1 and is narrower than what it replaced:
+the stage-to-entrance-pattern mapping is an assumption on top of a sourced rule, and the
+sprites are original pixel art drawn to published descriptions rather than the ROM's own.
+Neither is a rule error.
 
-The rules layer that carries all of this is 153 unit tests across eight Phaser-free
+The rules layer that carries all of this is 192 unit tests across ten Phaser-free
 modules. Against the five clones surveyed in section 3 — four with no tests at all and
 one with a single screen-state test — that is the part of this repo least likely to be
 matched.

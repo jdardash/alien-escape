@@ -118,6 +118,15 @@ export const DIVE = {
   bombChance: 0.65,
   bombSpeed: 360,
   /**
+   * How far into a run an attacker releases its bomb.
+   *
+   * A fixed point in the run rather than a per-frame roll, so the release
+   * happens at the same place on any refresh rate. A held fighter diving with
+   * its captor uses the same fraction, which is what lands the pair of shots
+   * together.
+   */
+  bombAtProgress: 0.3,
+  /**
    * How many enemy bombs may exist at once.
    *
    * The arcade reserves exactly eight hardware sprites for enemy shots, and
@@ -246,13 +255,13 @@ export const BOSS_TINT = { healthy: 0x66ff66, damaged: null };
  * leave. The pulse is not decoration: it is the only warning the player gets,
  * and it is long enough here to be acted on.
  *
- * The repo ships no artwork for Scorpions, Bosconian Spy Ships or Galaxian
- * Flagships, so each borrows an existing enemy silhouette and is filled with a
- * flat colour (see `createTransformEnemy` for why filled and not tinted). The
- * colours follow the sourced descriptions where there is one -- Scorpions are
- * yellow and Spy Ships are green -- and the Flagship is given a pale blue that
- * separates it from the red Goei sitting in formation behind it. Silhouettes
- * are therefore not authentic; colour, cadence, cycle order and value are.
+ * All three are drawn as pixel art in `src/art/pixelArt.js` rather than
+ * loaded: the repo ships no PNG for a Scorpion, a Bosconian Spy Ship or a
+ * Galaxian Flagship, and the stand-in that preceded it -- an existing enemy
+ * silhouette filled with a flat colour -- made all three the same ship in
+ * three colours. The colours follow the sourced descriptions where there is
+ * one: Scorpions are yellow, Spy Ships green, and the Flagship keeps
+ * Galaxian's blue with red wingtips.
  */
 export const TRANSFORM = {
   /** How often the game may pull a Zako out, once the stage allows it. */
@@ -264,32 +273,39 @@ export const TRANSFORM = {
   runDurationMs: 3400,
   /** Horizontal gap between the three ships as they set off. */
   spacingX: 44,
-  art: {
-    scorpion: { texture: 'enemyBee', tint: 0xffdd33 },
-    spyShip: { texture: 'enemyBossTeal', tint: 0x66ff99 },
-    flagship: { texture: 'enemyBossRed', tint: 0x99ccff },
-  },
+  /**
+   * Screen pixels per art pixel.
+   *
+   * The grids are 16 x 16, so this draws a bonus ship at 48px against a Zako's
+   * 46: a shade larger, which is right for the thing on the board worth a
+   * thousand points. Generated at its drawn size and used at scale 1, so the
+   * pixels stay square instead of being resampled.
+   */
+  pixelSize: 3,
 };
 
 /**
  * The stage flags along the bottom-right of the HUD.
  *
  * The arcade draws one small flag per denomination rather than a number, and
- * the colour is how a player tells a 30 from a 50 at a glance. The repo has no
- * flag artwork, so the six textures are generated at run time from these
- * values: a pole with a coloured banner, sized to sit in the HUD strip.
+ * the colour is how a player tells a 30 from a 50 at a glance.
+ *
+ * `width` and `height` are in *authored* pixels: the six flags are pixel art
+ * in `src/art/pixelArt.js`, drawn `pixelSize` screen pixels to the art pixel,
+ * so a flag occupies 20 x 24 on screen. An earlier revision drew them as two
+ * filled rectangles at those screen dimensions, which is why the numbers moved
+ * here rather than changing.
  *
  * The colours are chosen for separation on a black field and are not claimed
- * to match the cabinet's palette, which could not be sourced. The *shape* and
- * the one-flag-per-denomination arrangement are the authentic parts; the
+ * to match the cabinet's palette, which could not be sourced -- which is why
+ * each denomination also carries its own banner motif. The *shape* and the
+ * one-flag-per-denomination arrangement are the authentic parts; the
  * denominations themselves come from `stageFlags` and are sourced.
  */
 export const FLAG_ART = {
-  width: 19,
-  height: 22,
-  poleWidth: 2,
-  bannerHeight: 13,
-  poleColor: 0xc8c8d0,
+  width: 10,
+  height: 12,
+  pixelSize: 2,
   colors: {
     1: 0x66ddff,
     5: 0xffdd44,

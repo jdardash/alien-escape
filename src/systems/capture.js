@@ -121,6 +121,24 @@ export function resolveCaptorDestroyed(state, captorIsDiving) {
   return captorIsDiving ? RescueOutcome.RESCUED : RescueOutcome.CAPTIVE_LOST;
 }
 
+/**
+ * Whether the held fighter is in a position to bomb the player.
+ *
+ * A captured Fighter does not sit out the rest of the stage: it joins the
+ * enemy side and attacks. What puts it in range is its captor leaving the
+ * grid, since the ship is pinned beneath the boss and goes wherever the boss
+ * goes. So the rule is gated on the captor diving, not merely on being held --
+ * a captive parked in the formation is as far from the player as the rest of
+ * the grid and, like the rest of the grid, does not fire from up there.
+ *
+ * The effect is that a captor's dive is meaningfully more dangerous than any
+ * other, which is the right pressure: it is also the only dive during which
+ * the player can win the ship back.
+ */
+export function captiveCanBomb(state, captorIsDiving) {
+  return state === CaptureState.HELD && Boolean(captorIsDiving);
+}
+
 /** True while a beam is on screen and able to catch the player. */
 export function isBeamDangerous(state) {
   return state === CaptureState.BEAM_OPENING || state === CaptureState.BEAM_ACTIVE;

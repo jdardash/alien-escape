@@ -6,6 +6,8 @@ import {
   ENTRY_GROUP_COUNT,
   buildFormationSlots,
   buildEntryGroups,
+  ENTRANCE_PATTERN_COUNT,
+  ENTRANCE_PATTERN_BOTH_SIDES,
   breathScaleAt,
   swayOffsetAt,
   slotWorldPosition,
@@ -75,22 +77,86 @@ describe('entry flights', () => {
     );
   });
 
-  // The heart of it. One curve per flight is what makes the group arrive
-  // single file; the version this replaced handed every enemy `index % 4`,
-  // which put four curves in the air at once and had consecutive arrivals
-  // flying through each other.
-  it('gives each flight a single shared curve', () => {
-    for (const group of buildEntryGroups()) {
-      expect(Number.isInteger(group.pathVariant)).toBe(true);
-      expect(group.pathVariant).toBeGreaterThanOrEqual(0);
-      expect(group.pathVariant).toBeLessThan(4);
+  it('gives every member a curve the path module actually has', () => {
+    for (let pattern = 0; pattern < ENTRANCE_PATTERN_COUNT; pattern += 1) {
+      for (const group of buildEntryGroups(pattern)) {
+        for (const member of group.members) {
+          expect(Number.isInteger(member.pathVariant)).toBe(true);
+          expect(member.pathVariant).toBeGreaterThanOrEqual(0);
+          expect(member.pathVariant).toBeLessThan(4);
+        }
+      }
+    }
+  });
+
+  // The heart of it. A stage flies one entrance pattern from first flight to
+  // last; the version this replaced drew from a fixed five-entry list that
+  // mixed top-corner sweeps and side loops inside a single wave, so no stage
+  // ever flew one of the arcade's three patterns cleanly.
+  it('draws every flight of a stage from that pattern own pair of curves', () => {
+    for (let pattern = 0; pattern < ENTRANCE_PATTERN_COUNT; pattern += 1) {
+      const used = new Set(
+        buildEntryGroups(pattern).flatMap((group) =>
+          group.members.map((member) => member.pathVariant),
+        ),
+      );
+      expect(used.size).toBe(2);
+    }
+  });
+
+  it('gives the three patterns three distinct choreographies', () => {
+    const signature = (pattern) =>
+      JSON.stringify(
+        buildEntryGroups(pattern).map((group) =>
+          group.members.map((member) => [member.pathVariant, member.step]),
+        ),
+      );
+
+    const signatures = new Set([signature(0), signature(1), signature(2)]);
+    expect(signatures.size).toBe(3);
+  });
+
+  // Sourced: the first pattern "is the only pattern where enemies will enter
+  // from both sides of the screen at the same time".
+  it('has exactly one pattern that enters from both sides at once', () => {
+    const bothSidesAtOnce = (pattern) =>
+      buildEntryGroups(pattern).some((group) =>
+        group.members.some((member) =>
+          group.members.some(
+            (other) => other.step === member.step && other.pathVariant !== member.pathVariant,
+          ),
+        ),
+      );
+
+    const patterns = [0, 1, 2].filter(bothSidesAtOnce);
+    expect(patterns).toEqual([ENTRANCE_PATTERN_BOTH_SIDES]);
+  });
+
+  it('sends the other two patterns in single file, one curve per flight', () => {
+    for (const pattern of [0, 1, 2].filter((p) => p !== ENTRANCE_PATTERN_BOTH_SIDES)) {
+      for (const group of buildEntryGroups(pattern)) {
+        const variants = new Set(group.members.map((member) => member.pathVariant));
+        const steps = group.members.map((member) => member.step);
+
+        expect(variants.size).toBe(1);
+        expect(steps).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+      }
     }
   });
 
   it('never sends two flights in a row down the same curve', () => {
-    const groups = buildEntryGroups();
-    for (let i = 1; i < groups.length; i += 1) {
-      expect(groups[i].pathVariant).not.toBe(groups[i - 1].pathVariant);
+    for (let pattern = 0; pattern < ENTRANCE_PATTERN_COUNT; pattern += 1) {
+      const groups = buildEntryGroups(pattern);
+      const curves = groups.map((group) =>
+        [...new Set(group.members.map((member) => member.pathVariant))].sort().join(),
+      );
+
+      for (let i = 1; i < curves.length; i += 1) {
+        // A both-sides flight uses the same pair every time, so it is exempt:
+        // what alternates there is which side leads, inside the flight.
+        if (pattern === ENTRANCE_PATTERN_BOTH_SIDES) continue;
+        expect(curves[i]).not.toBe(curves[i - 1]);
+      }
     }
   });
 

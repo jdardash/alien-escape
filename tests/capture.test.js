@@ -9,7 +9,9 @@ import {
   hasDualFighter,
   hasCaptiveOnScreen,
   bulletLimit,
+  captiveCanBomb,
 } from '../src/systems/capture.js';
+import { captiveEscapePath, pointOnPath } from '../src/systems/paths.js';
 import { CAPTURE, PLAYER, SCREEN, FORMATION_BOTTOM_Y } from '../src/config.js';
 
 /** Drive the machine through a list of events from IDLE. */
@@ -209,5 +211,56 @@ describe('derived rules', () => {
     for (const state of Object.values(CaptureState)) {
       expect(hasDualFighter(state)).toBe(state === CaptureState.DUAL);
     }
+  });
+});
+
+describe('a held fighter fights for the other side', () => {
+  // Sourced: a captured Fighter "joins the enemy side and attacks". It only
+  // reaches the player when its captor takes it out of the grid, so the rule
+  // is gated on the captor diving rather than on being held.
+  it('bombs the player while its captor is diving', () => {
+    expect(captiveCanBomb(CaptureState.HELD, true)).toBe(true);
+  });
+
+  it('holds fire while its captor sits in formation', () => {
+    expect(captiveCanBomb(CaptureState.HELD, false)).toBe(false);
+  });
+
+  it('never bombs when there is no captive to do it', () => {
+    for (const state of Object.values(CaptureState)) {
+      if (state === CaptureState.HELD) continue;
+      expect(captiveCanBomb(state, true)).toBe(false);
+    }
+  });
+});
+
+describe('a captive whose captor died in formation', () => {
+  // Sourced: shoot the captor while it is in formation and "eventually the
+  // captured Fighter will swoop down on you... it will disappear off the
+  // bottom of the screen and go away". It attacks on the way out; it does not
+  // simply drop.
+  it('swoops at the player rather than falling away', () => {
+    const path = captiveEscapePath({ x: 200, y: FORMATION_BOTTOM_Y }, 340, SCREEN);
+    const nearestToPlayerRow = Array.from({ length: 41 }, (_, i) =>
+      pointOnPath(path, i / 40),
+    ).reduce((best, point) =>
+      Math.abs(point.y - PLAYER.y) < Math.abs(best.y - PLAYER.y) ? point : best,
+    );
+
+    // It passes through the player's row within a ship's width of them.
+    expect(Math.abs(nearestToPlayerRow.x - 340)).toBeLessThan(60);
+  });
+
+  it('leaves through the bottom of the screen', () => {
+    const path = captiveEscapePath({ x: 200, y: FORMATION_BOTTOM_Y }, 340, SCREEN);
+    expect(pointOnPath(path, 1).y).toBeGreaterThan(SCREEN.height);
+  });
+
+  it('starts where the captive was standing', () => {
+    const origin = { x: 200, y: FORMATION_BOTTOM_Y };
+    const start = pointOnPath(captiveEscapePath(origin, 340, SCREEN), 0);
+
+    expect(start.x).toBeCloseTo(origin.x, 6);
+    expect(start.y).toBeCloseTo(origin.y, 6);
   });
 });
