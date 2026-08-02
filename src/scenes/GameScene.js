@@ -53,6 +53,7 @@ import {
   flightTransform,
 } from '../systems/flight.js';
 import { advanceScheduler, createAttackScheduler } from '../systems/attack.js';
+import { DIP_DEFAULTS, bonusSchemeFor, loadDips } from '../systems/dips.js';
 import {
   STARFIELD_SCROLL,
   advanceStarfield,
@@ -173,9 +174,14 @@ export class GameScene extends Phaser.Scene {
     // a new player would get.
     this.rank = this.demo ? 0 : loadRank(this.storage);
 
+    // The operator's switch block decides how many fighters a credit buys
+    // and which bonus scheme pays. A demo plays the factory machine.
+    this.dips = this.demo ? { ...DIP_DEFAULTS } : loadDips(this.storage);
+    this.bonusScheme = bonusSchemeFor(this.dips);
+
     this.session = createSession({
       playerCount: this.demo ? 1 : (data?.playerCount ?? 1),
-      startingLives: PLAYER.startingLives,
+      startingLives: this.dips.lives,
     });
   }
 
@@ -1903,7 +1909,7 @@ export class GameScene extends Phaser.Scene {
     const previous = this.score;
     this.score += points;
 
-    const earned = extraLivesEarned(previous, this.score);
+    const earned = extraLivesEarned(previous, this.score, this.bonusScheme);
     if (earned > 0) {
       this.lives += earned;
       this.showBanner('EXTRA LIFE', 900);

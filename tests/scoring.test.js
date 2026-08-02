@@ -151,3 +151,30 @@ describe('extra lives', () => {
     expect(extraLivesEarned(50000, 50000)).toBe(0);
   });
 });
+
+describe('bonus schemes from the DIP sheet', () => {
+  it('stops after the second award when the scheme has no interval', () => {
+    const scheme = { id: 'A', first: 20000, second: 60000, every: null };
+    expect(extraLivesEarned(0, 60000, scheme)).toBe(2);
+    expect(extraLivesEarned(60000, 500000, scheme)).toBe(0);
+  });
+
+  it('pays nothing at all on the NONE scheme', () => {
+    const none = { id: 'NONE', first: null, second: null, every: null };
+    expect(extraLivesEarned(0, 1000000, none)).toBe(0);
+  });
+
+  it('matches the factory constants when called without a scheme', () => {
+    expect(extraLivesEarned(0, 20000)).toBe(1);
+    expect(extraLivesEarned(0, 70000)).toBe(2);
+    expect(extraLivesEarned(0, 140000)).toBe(3);
+  });
+
+  it('shifts the ladder on a harder scheme', () => {
+    const hard = { id: 'E', first: 30000, second: 100000, every: 100000 };
+    expect(extraLivesEarned(0, 29999, hard)).toBe(0);
+    expect(extraLivesEarned(0, 30000, hard)).toBe(1);
+    expect(extraLivesEarned(0, 100000, hard)).toBe(2);
+    expect(extraLivesEarned(0, 300000, hard)).toBe(4);
+  });
+});

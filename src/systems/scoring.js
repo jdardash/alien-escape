@@ -131,23 +131,39 @@ export function scoreFor(type, context = {}) {
  * 20000 plus an interval, so the first gap is 50000 and every later gap is
  * 70000. Reading it as a uniform interval from 20000 puts every award after
  * the first in the wrong place.
+ *
+ * Which scheme is in force is a DIP switch: the cabinet offers several, some
+ * of which stop after the second award and one of which pays nothing at all.
+ * The schemes live in `dips.js`; the factory one is spelled out here because
+ * the title screen prints it and the tests pin it.
  */
 export const FIRST_EXTRA_LIFE = 20000;
 export const SECOND_EXTRA_LIFE = 70000;
 export const EXTRA_LIFE_INTERVAL = 70000;
 
+/** The factory scheme, in the shape `dips.js` schemes take. */
+export const FACTORY_BONUS_SCHEME = Object.freeze({
+  id: 'C',
+  first: FIRST_EXTRA_LIFE,
+  second: SECOND_EXTRA_LIFE,
+  every: EXTRA_LIFE_INTERVAL,
+});
+
 /**
- * How many extra lives crossing from `previousScore` to `newScore` awards.
+ * How many extra lives crossing from `previousScore` to `newScore` awards
+ * under a bonus scheme.
  *
  * Returns a count rather than a boolean so that a single large bonus, such as
  * a perfect Challenging Stage, can legitimately award more than one life.
+ * Called without a scheme this is the factory machine.
  */
-export function extraLivesEarned(previousScore, newScore) {
-  return livesAwardedAt(newScore) - livesAwardedAt(previousScore);
+export function extraLivesEarned(previousScore, newScore, scheme = FACTORY_BONUS_SCHEME) {
+  return livesAwardedAt(newScore, scheme) - livesAwardedAt(previousScore, scheme);
 }
 
-function livesAwardedAt(score) {
-  if (score < FIRST_EXTRA_LIFE) return 0;
-  if (score < SECOND_EXTRA_LIFE) return 1;
-  return 2 + Math.floor((score - SECOND_EXTRA_LIFE) / EXTRA_LIFE_INTERVAL);
+function livesAwardedAt(score, scheme) {
+  if (scheme.first === null || score < scheme.first) return 0;
+  if (scheme.second === null || score < scheme.second) return 1;
+  if (scheme.every === null) return 2;
+  return 2 + Math.floor((score - scheme.second) / scheme.every);
 }

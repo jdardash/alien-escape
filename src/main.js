@@ -2,6 +2,7 @@ import { SCREEN } from './config.js';
 import { TitleScene } from './scenes/TitleScene.js';
 import { GameScene } from './scenes/GameScene.js';
 import { GameOverScene } from './scenes/GameOverScene.js';
+import { ServiceScene } from './scenes/ServiceScene.js';
 
 /**
  * Galaga is played on a tall field: the cabinet's monitor is mounted
@@ -27,7 +28,7 @@ const config = {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  scene: [TitleScene, GameScene, GameOverScene],
+  scene: [TitleScene, GameScene, GameOverScene, ServiceScene],
 };
 
 globalThis.__game = new Phaser.Game(config);

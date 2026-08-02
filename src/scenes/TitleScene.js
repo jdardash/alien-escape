@@ -1,5 +1,14 @@
 import { SCREEN, SHIP_ART } from '../config.js';
 import {
+  CoinageMode,
+  bonusSchemeFor,
+  consumeCredits,
+  createCoinBox,
+  insertCoin,
+  loadDips,
+  startAllowed,
+} from '../systems/dips.js';
+import {
   STARFIELD_SCROLL,
   advanceStarfield,
   createStarfield,
@@ -13,12 +22,7 @@ import { applyShipArt, queueLocalArt, usingLocalArt } from '../art/localArt.js';
 import { installSoundBank } from '../audio/soundBank.js';
 import { queueLocalAudio, usingLocalAudio } from '../audio/localAudio.js';
 import { EnemyType } from '../systems/formation.js';
-import {
-  scoreFor,
-  FIRST_EXTRA_LIFE,
-  SECOND_EXTRA_LIFE,
-  EXTRA_LIFE_INTERVAL,
-} from '../systems/scoring.js';
+import { scoreFor } from '../systems/scoring.js';
 
 /**
  * The attract mode.
@@ -64,22 +68,25 @@ export class TitleScene extends Phaser.Scene {
     this.storage = resolveStorage(globalThis.localStorage);
     this.rank = loadRank(this.storage);
 
-    // Enough for either start button. A cabinet counts down what has been paid
-    // in; a browser has nothing to pay in, so this is what an operator would
-    // call a machine set to free play -- the credit line is there because the
-    // screen is wrong without it, not because anything is being charged.
-    this.credits = 2;
+    // The operator's switch block, and the coin box under the slot. From the
+    // factory the machine is on free play -- a public web build charging
+    // imaginary coins would be a joke at the player's expense -- but the
+    // coinage model is real: set 1 COIN 1 PLAY in the service screen (F2)
+    // and the start buttons want credits, which the C key inserts.
+    this.dips = loadDips(this.storage);
+    this.coinBox = createCoinBox();
 
     // The 63-star hardware field, drifting at attract speed. Drawn a frame
     // at a time into one Graphics object; see `src/systems/starfield.js`.
     this.starfield = setStarfieldScroll(createStarfield(), STARFIELD_SCROLL.title);
     this.starLayer = this.add.graphics();
 
-    // The attract screen has the theme under it, as the cabinet does. It is
+    // The attract screen has the theme under it, as the cabinet does -- unless
+    // the operator has switched attract sound off, which is a real DIP. It is
     // stopped rather than left running when the game starts, so the opening
     // stage is played over the low ambient pulse instead of over music.
     this.theme = this.sound.add('theme');
-    this.theme.play({ volume: 0.4, loop: true });
+    if (this.dips.demoSound) this.theme.play({ volume: 0.4, loop: true });
 
     // Every ship the chart draws, at the size it draws them.
     for (const name of ['zako', 'goei', 'boss', 'player']) {
@@ -106,16 +113,22 @@ export class TitleScene extends Phaser.Scene {
 
     // 1P START and 2P START, the two buttons on the panel. SPACE is bound to
     // the first of them as well, because a browser player reaches for it and a
-    // cabinet's "1P START" means nothing to a keyboard.
-    this.input.keyboard.once('keydown-SPACE', () => this.startGame(1));
-    this.input.keyboard.once('keydown-ONE', () => this.startGame(1));
-    this.input.keyboard.once('keydown-TWO', () => this.startGame(2));
+    // cabinet's "1P START" means nothing to a keyboard. Bound with `on`
+    // rather than `once`: on a coined machine a start without credits is
+    // refused, and the button has to keep working after a refusal.
+    this.input.keyboard.on('keydown-SPACE', () => this.startGame(1));
+    this.input.keyboard.on('keydown-ONE', () => this.startGame(1));
+    this.input.keyboard.on('keydown-TWO', () => this.startGame(2));
+
+    // The coin slot, for a machine the operator has taken off free play.
+    this.input.keyboard.on('keydown-C', () => this.coinInserted());
 
     // The DIP switch, which on a real machine is inside the box and is the
     // operator's business rather than the player's. There is no box here, so it
     // is on the panel -- and it is stored like a machine setting, so it stays
-    // put across games and reloads.
+    // put across games and reloads. F2 opens the rest of the switch block.
     this.input.keyboard.on('keydown-R', () => this.cycleRank());
+    this.input.keyboard.on('keydown-F2', () => this.openService());
   }
 
   /**
@@ -158,7 +171,28 @@ export class TitleScene extends Phaser.Scene {
 
   rankLabel() {
     const suffix = this.rank === 0 ? 'factory' : 'harder';
-    return `RANK ${RANK_NAMES[this.rank]} (${suffix})    R to change`;
+    return `RANK ${RANK_NAMES[this.rank]} (${suffix})    R to change    F2 service`;
+  }
+
+  /** Hand the screen to the operator. */
+  openService() {
+    this.panelTimer?.remove();
+    this.theme.stop();
+    this.scene.start('ServiceScene');
+  }
+
+  /** The credit line: what free play shows, or what has been paid in. */
+  creditLabel() {
+    if (this.dips.coinage === CoinageMode.FREE_PLAY) return 'FREE PLAY';
+    return `CREDIT ${this.coinBox.credits}`;
+  }
+
+  /** A coin dropped in the slot. Decorative on free play, as on the cabinet. */
+  coinInserted() {
+    if (this.dips.coinage === CoinageMode.FREE_PLAY) return;
+    this.coinBox = insertCoin(this.dips.coinage, this.coinBox);
+    this.sound.play('coin', { volume: 0.5 });
+    this.creditText.setText(this.creditLabel());
   }
 
   /**
@@ -167,7 +201,7 @@ export class TitleScene extends Phaser.Scene {
    */
   drawChrome() {
     this.creditText = this.add
-      .text(20, SCREEN.height - 30, `CREDIT ${this.credits}`, {
+      .text(20, SCREEN.height - 30, this.creditLabel(), {
         font: '16px monospace',
         fill: '#ffffff',
       })
@@ -183,14 +217,19 @@ export class TitleScene extends Phaser.Scene {
 
     this.tweens.add({ targets: prompt, alpha: 0.2, duration: 700, yoyo: true, repeat: -1 });
 
-    // The two start buttons, and what they cost. A cabinet with two credits in
-    // it will take either; this one always has two, because a browser has no
-    // coin slot and a demo nobody can play is not a demo.
+    // The two start buttons, and what they cost. On free play they always
+    // work; on a coined machine the C key is the slot.
+    const coined = this.dips.coinage !== CoinageMode.FREE_PLAY;
     this.add
-      .text(SCREEN.width / 2, SCREEN.height - 74, '1 PLAYER: SPACE or 1      2 PLAYERS: 2', {
-        font: '14px monospace',
-        fill: '#8899bb',
-      })
+      .text(
+        SCREEN.width / 2,
+        SCREEN.height - 74,
+        `1 PLAYER: SPACE or 1      2 PLAYERS: 2${coined ? '      COIN: C' : ''}`,
+        {
+          font: '14px monospace',
+          fill: '#8899bb',
+        },
+      )
       .setOrigin(0.5)
       .setDepth(10);
 
@@ -347,18 +386,19 @@ export class TitleScene extends Phaser.Scene {
   /**
    * The extra-ship ladder, which the cabinet prints on coin-up.
    *
-   * Note the second award is at 70,000 outright rather than 20,000 plus an
-   * interval, which is why the two lines quote absolute figures and only the
-   * third quotes a repeat.
+   * Printed from the bonus scheme the DIP switches select, which is why a
+   * machine set to a stop-after-two scheme prints two lines and one set to
+   * NONE prints none: what the panel promises is what the game pays.
    */
   drawBonusLadder() {
     this.text(SCREEN.width / 2, 210, '-- BONUS --', { font: '24px monospace', fill: '#ff4444' });
 
-    const lines = [
-      `1ST BONUS FOR ${FIRST_EXTRA_LIFE} PTS`,
-      `2ND BONUS FOR ${SECOND_EXTRA_LIFE} PTS`,
-      `AND FOR EVERY ${EXTRA_LIFE_INTERVAL} PTS`,
-    ];
+    const scheme = bonusSchemeFor(this.dips);
+    const lines = [];
+    if (scheme.first !== null) lines.push(`1ST BONUS FOR ${scheme.first} PTS`);
+    if (scheme.second !== null) lines.push(`2ND BONUS FOR ${scheme.second} PTS`);
+    if (scheme.every !== null) lines.push(`AND FOR EVERY ${scheme.every} PTS`);
+    if (lines.length === 0) lines.push('NO BONUS FIGHTERS');
 
     lines.forEach((line, index) => {
       const y = 320 + index * 70;
@@ -423,13 +463,16 @@ export class TitleScene extends Phaser.Scene {
    */
   startGame(playerCount) {
     if (this.starting) return;
+    // A start the coin box cannot cover is refused, exactly as the cabinet
+    // refuses it: silently, with the credit line explaining why.
+    if (!startAllowed(this.dips.coinage, this.coinBox, playerCount)) return;
     this.starting = true;
 
-    // Coin, then the start jingle, then the game -- the cabinet's own order.
+    // Pay, then the start jingle, then the game -- the cabinet's own order.
     this.panelTimer?.remove();
     this.theme.stop();
-    this.credits = Math.max(this.credits - playerCount, 0);
-    this.creditText.setText(`CREDIT ${this.credits}`);
+    this.coinBox = consumeCredits(this.dips.coinage, this.coinBox, playerCount);
+    this.creditText.setText(this.creditLabel());
     this.sound.play('coin', { volume: 0.5 });
     this.sound.play('gameStart', { volume: 0.5 });
     this.time.delayedCall(600, () => this.scene.start('GameScene', { playerCount }));
