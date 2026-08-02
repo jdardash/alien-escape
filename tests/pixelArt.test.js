@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   parsePixelArt,
   composeFlag,
+  frameRows,
+  frameCount,
   TRANSFORM_SPRITES,
   FLAG_SPRITES,
   SHIP_SPRITES,
@@ -68,7 +70,9 @@ const channels = (colour) => ({
 
 describe('ship colour states', () => {
   const dominant = (name) =>
-    channels(dominantColour(parsePixelArt(SHIP_SPRITES[name].rows, SHIP_SPRITES[name].palette)));
+    channels(
+      dominantColour(parsePixelArt(frameRows(SHIP_SPRITES[name]), SHIP_SPRITES[name].palette)),
+    );
 
   it('reads a healthy Boss Galaga as green', () => {
     const { r, g, b } = dominant('boss');
@@ -86,8 +90,11 @@ describe('ship colour states', () => {
   });
 
   it('keeps the damaged boss distinct from a Zako, which is also blue', () => {
-    const boss = parsePixelArt(SHIP_SPRITES.bossDamaged.rows, SHIP_SPRITES.bossDamaged.palette);
-    const zako = parsePixelArt(SHIP_SPRITES.zako.rows, SHIP_SPRITES.zako.palette);
+    const boss = parsePixelArt(
+      frameRows(SHIP_SPRITES.bossDamaged),
+      SHIP_SPRITES.bossDamaged.palette,
+    );
+    const zako = parsePixelArt(frameRows(SHIP_SPRITES.zako), SHIP_SPRITES.zako.palette);
     expect(dominantColour(boss)).not.toBe(dominantColour(zako));
   });
 
@@ -106,7 +113,7 @@ describe('ship artwork', () => {
   const drawn = Object.fromEntries(
     Object.entries(SHIP_SPRITES).map(([name, sprite]) => [
       name,
-      parsePixelArt(sprite.rows, sprite.palette),
+      parsePixelArt(frameRows(sprite), sprite.palette),
     ]),
   );
 
@@ -150,9 +157,9 @@ describe('ship artwork', () => {
   // A Boss Galaga changing colour on its first hit, and a captured fighter
   // hanging under its captor, both have to read as the *same ship* in a
   // different state. A shifted pixel would turn either into a different enemy.
-  it('keeps each recolour pixel-identical to the ship it recolours', () => {
+  it('keeps each recolour pixel-identical to the ship it recolours, every frame', () => {
     for (const [recolour, original] of Object.entries(SHIP_RECOLOURS)) {
-      expect(SHIP_SPRITES[recolour].rows).toEqual(SHIP_SPRITES[original].rows);
+      expect(SHIP_SPRITES[recolour].frames).toEqual(SHIP_SPRITES[original].frames);
     }
   });
 
@@ -166,11 +173,88 @@ describe('ship artwork', () => {
   });
 });
 
+describe('animation frames', () => {
+  const flapping = ['zako', 'goei', 'boss', 'bossDamaged'];
+
+  it('gives every formation alien two wing frames', () => {
+    for (const name of flapping) {
+      expect({ name, frames: frameCount(SHIP_SPRITES[name]) }).toEqual({ name, frames: 2 });
+    }
+  });
+
+  it('keeps the fighter and its captive single-frame, as the cabinet does', () => {
+    expect(frameCount(SHIP_SPRITES.player)).toBe(1);
+    expect(frameCount(SHIP_SPRITES.captive)).toBe(1);
+  });
+
+  it('gives every transform bonus ship two frames', () => {
+    for (const [name, sprite] of Object.entries(TRANSFORM_SPRITES)) {
+      expect({ name, frames: frameCount(sprite) }).toEqual({ name, frames: 2 });
+    }
+  });
+
+  it('authors every frame at 16 by 16 with a full palette', () => {
+    for (const sprite of [...Object.values(SHIP_SPRITES), ...Object.values(TRANSFORM_SPRITES)]) {
+      for (let frame = 0; frame < frameCount(sprite); frame += 1) {
+        const art = parsePixelArt(frameRows(sprite, frame), sprite.palette);
+        expect(art.width).toBe(16);
+        expect(art.height).toBe(16);
+      }
+    }
+  });
+
+  it('draws every frame symmetrically about its centre line', () => {
+    const all = { ...SHIP_SPRITES, ...TRANSFORM_SPRITES };
+    for (const [name, sprite] of Object.entries(all)) {
+      for (let frame = 0; frame < frameCount(sprite); frame += 1) {
+        const art = parsePixelArt(frameRows(sprite, frame), sprite.palette);
+        expect({ name, frame, unmirrored: unmirroredCells(art) }).toEqual({
+          name,
+          frame,
+          unmirrored: [],
+        });
+      }
+    }
+  });
+
+  it('makes each second frame genuinely different from the first', () => {
+    const animated = { ...TRANSFORM_SPRITES };
+    for (const name of flapping) animated[name] = SHIP_SPRITES[name];
+
+    for (const [name, sprite] of Object.entries(animated)) {
+      expect({ name, differs: frameRows(sprite, 0) !== frameRows(sprite, 1) }).toEqual({
+        name,
+        differs: true,
+      });
+      expect(frameRows(sprite, 0).join('|')).not.toBe(frameRows(sprite, 1).join('|'));
+    }
+  });
+
+  it('keeps every frame substantial enough to read as the same ship', () => {
+    for (const sprite of [...Object.values(SHIP_SPRITES), ...Object.values(TRANSFORM_SPRITES)]) {
+      for (let frame = 0; frame < frameCount(sprite); frame += 1) {
+        const art = parsePixelArt(frameRows(sprite, frame), sprite.palette);
+        expect(art.pixels.length).toBeGreaterThan(60);
+      }
+    }
+  });
+
+  it('refuses a frame index the sprite does not have', () => {
+    expect(() => frameRows(SHIP_SPRITES.player, 1)).toThrow(/frame/i);
+  });
+
+  it('reads single-frame sprites authored with plain rows, like the flags', () => {
+    const flag = FLAG_SPRITES[1];
+    expect(frameCount(flag)).toBe(1);
+    expect(frameRows(flag)).toBe(flag.rows);
+  });
+});
+
 describe('transform bonus enemy artwork', () => {
   const drawn = Object.fromEntries(
     Object.entries(TRANSFORM_SPRITES).map(([name, sprite]) => [
       name,
-      parsePixelArt(sprite.rows, sprite.palette),
+      parsePixelArt(frameRows(sprite), sprite.palette),
     ]),
   );
 

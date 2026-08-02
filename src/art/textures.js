@@ -12,7 +12,14 @@
  */
 
 import { FLAG_ART, SHIP_ART, TRANSFORM } from '../config.js';
-import { parsePixelArt, TRANSFORM_SPRITES, FLAG_SPRITES, SHIP_SPRITES } from './pixelArt.js';
+import {
+  parsePixelArt,
+  frameRows,
+  frameCount,
+  TRANSFORM_SPRITES,
+  FLAG_SPRITES,
+  SHIP_SPRITES,
+} from './pixelArt.js';
 
 /** Texture key for a stage flag of the given denomination. */
 export function flagTextureKey(value) {
@@ -27,13 +34,13 @@ export function flagTextureKey(value) {
  * separately at exactly its drawn size rather than one being scaled to the
  * others, so no use of the artwork is ever resampled.
  */
-export function shipTextureKey(name, pixelSize = SHIP_ART.pixelSize) {
-  return `ship-${name}-${pixelSize}`;
+export function shipTextureKey(name, pixelSize = SHIP_ART.pixelSize, frame = 0) {
+  return frame === 0 ? `ship-${name}-${pixelSize}` : `ship-${name}-${pixelSize}-f${frame}`;
 }
 
 /** Texture key for one of the transform bonus ships. */
-export function transformTextureKey(type) {
-  return `transform-${type}`;
+export function transformTextureKey(type, frame = 0) {
+  return frame === 0 ? `transform-${type}` : `transform-${type}-f${frame}`;
 }
 
 /**
@@ -43,10 +50,10 @@ export function transformTextureKey(type) {
  * rects, once, at scene start; merging them would trade a readable loop for a
  * saving nothing can measure.
  */
-export function createPixelTexture(scene, key, sprite, pixelSize) {
+export function createPixelTexture(scene, key, sprite, pixelSize, frame = 0) {
   if (scene.textures.exists(key)) return key;
 
-  const art = parsePixelArt(sprite.rows, sprite.palette);
+  const art = parsePixelArt(frameRows(sprite, frame), sprite.palette);
   const graphics = scene.make.graphics({ add: false });
 
   for (const pixel of art.pixels) {
@@ -72,7 +79,11 @@ export function createPixelTexture(scene, key, sprite, pixelSize) {
 export function createShipTexture(scene, name, pixelSize = SHIP_ART.pixelSize) {
   const sprite = SHIP_SPRITES[name];
   if (!sprite) throw new Error(`No ship artwork named "${name}"`);
-  return createPixelTexture(scene, shipTextureKey(name, pixelSize), sprite, pixelSize);
+
+  for (let frame = 0; frame < frameCount(sprite); frame += 1) {
+    createPixelTexture(scene, shipTextureKey(name, pixelSize, frame), sprite, pixelSize, frame);
+  }
+  return shipTextureKey(name, pixelSize);
 }
 
 /** Build every ship at its gameplay size, plus the fighter at life-icon size. */
@@ -84,10 +95,12 @@ export function createShipTextures(scene) {
   createShipTexture(scene, 'player', SHIP_ART.lifeIconPixelSize);
 }
 
-/** Build all three transform bonus ships. */
+/** Build all three transform bonus ships, every frame of each. */
 export function createTransformTextures(scene) {
   for (const [type, sprite] of Object.entries(TRANSFORM_SPRITES)) {
-    createPixelTexture(scene, transformTextureKey(type), sprite, TRANSFORM.pixelSize);
+    for (let frame = 0; frame < frameCount(sprite); frame += 1) {
+      createPixelTexture(scene, transformTextureKey(type, frame), sprite, TRANSFORM.pixelSize, frame);
+    }
   }
 }
 

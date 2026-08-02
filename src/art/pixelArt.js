@@ -64,31 +64,76 @@ export function parsePixelArt(rows, palette) {
 }
 
 /**
+ * The rows of one frame of a sprite.
+ *
+ * Animated sprites carry a `frames` array; single-frame art -- the flags, and
+ * anything authored before animation existed -- carries plain `rows`. This is
+ * the one place that difference is absorbed, so everything downstream asks for
+ * a frame and never looks inside.
+ */
+export function frameRows(sprite, frame = 0) {
+  const frames = sprite.frames ?? [sprite.rows];
+  const rows = frames[frame];
+  if (!rows) throw new Error(`sprite has no frame ${frame}`);
+  return rows;
+}
+
+/** How many frames a sprite carries. One, unless it was drawn to animate. */
+export function frameCount(sprite) {
+  return (sprite.frames ?? [sprite.rows]).length;
+}
+
+/**
  * The Zako, the bee that fills the bottom two rows of the formation.
  *
  * Blue hull with a pair of antennae above and legs below, and the wide flat
  * yellow wings that are how a Zako is told from a Goei at the far end of a
  * dive, when neither is much more than a shape.
+ *
+ * Two frames, as the cabinet has: wings level in the first, swept up and
+ * forward in the second, legs tucking as they lift. The whole formation
+ * alternates between the two on one shared clock.
  */
+const ZAKO_WINGS_LEVEL = [
+  '.....d....d.....',
+  '......d..d......',
+  '.....dccccd.....',
+  '....dcwccwcd....',
+  '....dcwccwcd....',
+  '....dccccccd....',
+  '..yydccccccdyy..',
+  '.yyydccccccdyyy.',
+  '.yyydccddccdyyy.',
+  '..yydccccccdyy..',
+  '....dccccccd....',
+  '.....dccccd.....',
+  '.....dccccd.....',
+  '.....dc..cd.....',
+  '....d......d....',
+  '...d........d...',
+];
+
+const ZAKO_WINGS_UP = [
+  '.....d....d.....',
+  '......d..d......',
+  '.....dccccd.....',
+  '....dcwccwcd....',
+  '.yy.dcwccwcd.yy.',
+  'yyyydccccccdyyyy',
+  '.yyydccccccdyyy.',
+  '..yydccccccdyy..',
+  '....dccddccd....',
+  '....dccccccd....',
+  '....dccccccd....',
+  '.....dccccd.....',
+  '.....dccccd.....',
+  '.....dc..cd.....',
+  '.....d....d.....',
+  '....d......d....',
+];
+
 const ZAKO = {
-  rows: [
-    '.....d....d.....',
-    '......d..d......',
-    '.....dccccd.....',
-    '....dcwccwcd....',
-    '....dcwccwcd....',
-    '....dccccccd....',
-    '..yydccccccdyy..',
-    '.yyydccccccdyyy.',
-    '.yyydccddccdyyy.',
-    '..yydccccccdyy..',
-    '....dccccccd....',
-    '.....dccccd.....',
-    '.....dccccd.....',
-    '.....dc..cd.....',
-    '....d......d....',
-    '...d........d...',
-  ],
+  frames: [ZAKO_WINGS_LEVEL, ZAKO_WINGS_UP],
   palette: {
     c: 0x38a8f0,
     d: 0x123c78,
@@ -105,25 +150,46 @@ const ZAKO = {
  * than standing straight out. The taper is the silhouette cue: a Goei is
  * widest at its shoulders, a Zako is widest at its waist.
  */
+const GOEI_WINGS_SWEPT = [
+  '.....dd..dd.....',
+  '.....drrrrd.....',
+  '.b..drwrrwrd..b.',
+  '.bb.drrrrrrd.bb.',
+  '.bbbdrrrrrrdbbb.',
+  '.bbbdrrrrrrdbbb.',
+  '.bbbdrdrrdrdbbb.',
+  '..bbdrrrrrrdbb..',
+  '...bdrrrrrrdb...',
+  '....drrrrrrd....',
+  '....drrrrrrd....',
+  '....drrrrrrd....',
+  '.....drrrrd.....',
+  '.....drrrrd.....',
+  '.....dr..rd.....',
+  '....d......d....',
+];
+
+const GOEI_WINGS_SPREAD = [
+  '.....dd..dd.....',
+  '.....drrrrd.....',
+  '....drwrrwrd....',
+  'bb..drrrrrrd..bb',
+  'bbb.drrrrrrd.bbb',
+  '.bbbdrrrrrrdbbb.',
+  '..bbdrdrrdrdbb..',
+  '...bdrrrrrrdb...',
+  '....drrrrrrd....',
+  '....drrrrrrd....',
+  '....drrrrrrd....',
+  '....drrrrrrd....',
+  '.....drrrrd.....',
+  '.....drrrrd.....',
+  '.....dr..rd.....',
+  '....d......d....',
+];
+
 const GOEI = {
-  rows: [
-    '.....dd..dd.....',
-    '.....drrrrd.....',
-    '.b..drwrrwrd..b.',
-    '.bb.drrrrrrd.bb.',
-    '.bbbdrrrrrrdbbb.',
-    '.bbbdrrrrrrdbbb.',
-    '.bbbdrdrrdrdbbb.',
-    '..bbdrrrrrrdbb..',
-    '...bdrrrrrrdb...',
-    '....drrrrrrd....',
-    '....drrrrrrd....',
-    '....drrrrrrd....',
-    '.....drrrrd.....',
-    '.....drrrrd.....',
-    '.....dr..rd.....',
-    '....d......d....',
-  ],
+  frames: [GOEI_WINGS_SWEPT, GOEI_WINGS_SPREAD],
   palette: {
     r: 0xf03028,
     d: 0x8c1810,
@@ -147,7 +213,7 @@ const GOEI = {
  * This replaced a green `setTint` laid over purple artwork, which had the same
  * effect from a distance and flattened the shading up close.
  */
-const BOSS_ROWS = [
+const BOSS_ARMS_RAISED = [
   '...k........k...',
   '...kg......gk...',
   '...kgk....kgk...',
@@ -166,8 +232,34 @@ const BOSS_ROWS = [
   '......kkkk......',
 ];
 
+const BOSS_ARMS_LOWERED = [
+  '................',
+  '...k........k...',
+  '...kg......gk...',
+  '...kgk....kgk...',
+  '....kggggggk....',
+  '...kgwggggwgk...',
+  '..kggwggggwggk..',
+  '.kggggggggggggk.',
+  'kggwwggggggwwggk',
+  'kgggggeggegggggk',
+  '.kggggeggeggggk.',
+  '.kggggggggggggk.',
+  '..kggggggggggk..',
+  '...kggggggggk...',
+  '....kggggggk....',
+  '.....kkkkkk.....',
+];
+
+/**
+ * One frames array, two palettes. The silhouette of the damaged boss cannot
+ * drift a pixel from the healthy one, on either frame, so both states share
+ * the array by reference and the tests pin it.
+ */
+const BOSS_FRAMES = [BOSS_ARMS_RAISED, BOSS_ARMS_LOWERED];
+
 const BOSS = {
-  rows: BOSS_ROWS,
+  frames: BOSS_FRAMES,
   palette: { g: 0x3cdc50, k: 0x0e5a20, w: 0xd8ffe0, e: 0x0c2a12 },
 };
 
@@ -181,7 +273,7 @@ const BOSS = {
  * change could cause.
  */
 const BOSS_DAMAGED = {
-  rows: BOSS_ROWS,
+  frames: BOSS_FRAMES,
   palette: { g: 0x3c78f0, k: 0x102a78, w: 0xd8e4ff, e: 0x0a1230 },
 };
 
@@ -213,8 +305,11 @@ const PLAYER_ROWS = [
   '....k..kk..k....',
 ];
 
+/** The fighter does not flap: one frame, shared with its captive recolour. */
+const PLAYER_FRAMES = [PLAYER_ROWS];
+
 const PLAYER_SHIP = {
-  rows: PLAYER_ROWS,
+  frames: PLAYER_FRAMES,
   palette: { w: 0xf0f0f8, r: 0xf04038, b: 0x40b8f8, k: 0xff8800 },
 };
 
@@ -234,7 +329,7 @@ const PLAYER_SHIP = {
  * well and was not what the cabinet does.
  */
 const CAPTIVE_SHIP = {
-  rows: PLAYER_ROWS,
+  frames: PLAYER_FRAMES,
   palette: { w: 0xf04038, r: 0x9c1810, b: 0xff8878, k: 0x701008 },
 };
 
@@ -273,25 +368,46 @@ export const SHIP_RECOLOURS = { bossDamaged: 'boss', captive: 'player' };
  * Drawn from above with its claws forward and its tail curled underneath, so
  * the stinger is the part pointing at the player.
  */
+const SCORPION_CLAWS_OPEN = [
+  '..kk........kk..',
+  '.kYYk......kYYk.',
+  '.kYrk......krYk.',
+  '..kYk......kYk..',
+  '...kYk....kYk...',
+  '....kYYkkYYk....',
+  '.....kYYYYk.....',
+  '....kYYooYYk....',
+  '....kYoYYoYk....',
+  '....kYYooYYk....',
+  '.....kYYYYk.....',
+  '......kYYk......',
+  '......kYYk......',
+  '.....kYrrYk.....',
+  '......krrk......',
+  '.......rr.......',
+];
+
+const SCORPION_CLAWS_PINCHED = [
+  '...kk......kk...',
+  '..kYYk....kYYk..',
+  '..kYrk....krYk..',
+  '...kYk....kYk...',
+  '....kYk..kYk....',
+  '....kYYkkYYk....',
+  '.....kYYYYk.....',
+  '....kYYooYYk....',
+  '....kYoYYoYk....',
+  '....kYYooYYk....',
+  '.....kYYYYk.....',
+  '......kYYk......',
+  '......kYYk......',
+  '.....kYrrYk.....',
+  '......krrk......',
+  '.......rr.......',
+];
+
 const SCORPION = {
-  rows: [
-    '..kk........kk..',
-    '.kYYk......kYYk.',
-    '.kYrk......krYk.',
-    '..kYk......kYk..',
-    '...kYk....kYk...',
-    '....kYYkkYYk....',
-    '.....kYYYYk.....',
-    '....kYYooYYk....',
-    '....kYoYYoYk....',
-    '....kYYooYYk....',
-    '.....kYYYYk.....',
-    '......kYYk......',
-    '......kYYk......',
-    '.....kYrrYk.....',
-    '......krrk......',
-    '.......rr.......',
-  ],
+  frames: [SCORPION_CLAWS_OPEN, SCORPION_CLAWS_PINCHED],
   palette: {
     Y: 0xffd633,
     o: 0xc08a10,
@@ -306,25 +422,46 @@ const SCORPION = {
  * Bosconian's stations are pods around a core, so this is a hexagonal body
  * with a pod above and below and lit ports down each flank.
  */
+const SPY_SHIP_PORTS_OUTER = [
+  '......dggd......',
+  '......gwwg......',
+  '......dggd......',
+  '.......dd.......',
+  '.....dggggd.....',
+  '...ddggggggdd...',
+  '..dgwggwwggwgd..',
+  '..dggwggggwggd..',
+  '..dggwggggwggd..',
+  '..dgwggwwggwgd..',
+  '...ddggggggdd...',
+  '.....dggggd.....',
+  '.......dd.......',
+  '......dggd......',
+  '......gwwg......',
+  '......dggd......',
+];
+
+const SPY_SHIP_PORTS_INNER = [
+  '......dggd......',
+  '......gwwg......',
+  '......dggd......',
+  '.......dd.......',
+  '.....dggggd.....',
+  '...ddggggggdd...',
+  '..dggggwwggggd..',
+  '..dgwggggggwgd..',
+  '..dgwggggggwgd..',
+  '..dggggwwggggd..',
+  '...ddggggggdd...',
+  '.....dggggd.....',
+  '.......dd.......',
+  '......dggd......',
+  '......gwwg......',
+  '......dggd......',
+];
+
 const SPY_SHIP = {
-  rows: [
-    '......dggd......',
-    '......gwwg......',
-    '......dggd......',
-    '.......dd.......',
-    '.....dggggd.....',
-    '...ddggggggdd...',
-    '..dgwggwwggwgd..',
-    '..dggwggggwggd..',
-    '..dggwggggwggd..',
-    '..dgwggwwggwgd..',
-    '...ddggggggdd...',
-    '.....dggggd.....',
-    '.......dd.......',
-    '......dggd......',
-    '......gwwg......',
-    '......dggd......',
-  ],
+  frames: [SPY_SHIP_PORTS_OUTER, SPY_SHIP_PORTS_INNER],
   palette: {
     g: 0x33dd66,
     d: 0x1a7a3c,
@@ -338,25 +475,46 @@ const SPY_SHIP = {
  * The widest of the three and the only one with swept wings, so it reads as
  * the biggest prize on the board at a glance.
  */
+const FLAGSHIP_TIPS_RED = [
+  '.......yy.......',
+  '......yppy......',
+  '.....yppppy.....',
+  '.....ybbbby.....',
+  '....bbbppbbb....',
+  '...bbbbppbbbb...',
+  '..rbbbbppbbbbr..',
+  '.rrbbbppppbbbrr.',
+  'rrbbbbppppbbbbrr',
+  '.rrbbbppppbbbrr.',
+  '..rbbbbppbbbbr..',
+  '...bbbbbbbbbb...',
+  '....bbyyyybb....',
+  '.....byyyyb.....',
+  '......yyyy......',
+  '.......yy.......',
+];
+
+const FLAGSHIP_TIPS_GOLD = [
+  '.......yy.......',
+  '......yppy......',
+  '.....yppppy.....',
+  '.....ybbbby.....',
+  '....bbbppbbb....',
+  '...bbbbppbbbb...',
+  '..ybbbbppbbbby..',
+  '.yrbbbppppbbbry.',
+  'yrbbbbppppbbbbry',
+  '.yrbbbppppbbbry.',
+  '..ybbbbppbbbby..',
+  '...bbbbbbbbbb...',
+  '....bbyyyybb....',
+  '.....byyyyb.....',
+  '......yyyy......',
+  '.......yy.......',
+];
+
 const FLAGSHIP = {
-  rows: [
-    '.......yy.......',
-    '......yppy......',
-    '.....yppppy.....',
-    '.....ybbbby.....',
-    '....bbbppbbb....',
-    '...bbbbppbbbb...',
-    '..rbbbbppbbbbr..',
-    '.rrbbbppppbbbrr.',
-    'rrbbbbppppbbbbrr',
-    '.rrbbbppppbbbrr.',
-    '..rbbbbppbbbbr..',
-    '...bbbbbbbbbb...',
-    '....bbyyyybb....',
-    '.....byyyyb.....',
-    '......yyyy......',
-    '.......yy.......',
-  ],
+  frames: [FLAGSHIP_TIPS_RED, FLAGSHIP_TIPS_GOLD],
   palette: {
     b: 0x3f6dff,
     p: 0xbcd6ff,
