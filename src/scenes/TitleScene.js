@@ -81,8 +81,10 @@ export class TitleScene extends Phaser.Scene {
     // attract loop plays at the volume the operator set.
     applyCabinet(this, SCREEN);
 
-    // The 63-star hardware field, drifting at attract speed. Drawn a frame
-    // at a time into one Graphics object; see `src/systems/starfield.js`.
+    // The 252-star hardware field, FROZEN: in attract the ROM writes star
+    // control 7, which the speed table maps to a dead stop (task_man.s:375),
+    // so the attract sky twinkles but does not move. Drawn a frame at a time
+    // into one Graphics object; see `src/systems/starfield.js`.
     this.starfield = setStarfieldScroll(createStarfield(), STARFIELD_SCROLL.title);
     this.starLayer = this.add.graphics();
 

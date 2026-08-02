@@ -1,102 +1,79 @@
 /**
  * The starfield.
  *
- * Galaga's stars are not artwork. A dedicated chip -- Namco's 05XX -- holds
- * an LFSR whose taps spray 63 star positions per set across a 256 x 256
- * field, four sets in all, lights two sets at a time and swaps which two on
- * a fixed blink cadence, and scrolls the whole field under the game's
- * direction: drifting in attract, streaming during play, dead stopped when
- * nothing flies. This module is that chip as pure data: the PNG tile it
- * replaces scrolled, but it neither blinked nor stopped nor reversed, and
- * its stars were pixels somebody drew rather than numbers the machine made.
+ * Galaga's stars are not artwork, and they are not random either. Namco's
+ * 05XX chip generates a FIXED table of 252 stars -- four sets of 63, each
+ * with a hardwired position on a 256 x 256 field and a hardwired 6-bit
+ * colour -- and the game's only involvement is a handful of control bits:
+ * which two sets are lit, and how the field scrolls. MAME captured the
+ * chip's output on a test rig, and this module runs on that capture
+ * (`starData.js`), so star positions and colours here are the arcade's own
+ * bytes rather than anything authored or pseudo-random.
  *
- * The 63-per-set count, the four sets, the two-lit-alternating blink and the
- * LFSR generation are the documented hardware behaviour. The specific taps
- * and the colour derivation are authored: the research describes the chip's
- * behaviour, not its netlist.
+ * Scroll control mirrors the ROM's star_ctrl port (task_man.s:328-382):
+ * value 1 while the ship flies (scrolling down), value 7 in attract and
+ * between events (frozen -- `STAR_SPEEDS[7]` is 0), and reversed upward for
+ * the tractor-beam pull (gg1-3.s l_236D sets the reverse flag; l_2305 and
+ * l_2327 clear it). Two independent bits pick the lit sets: one chooses
+ * set 0 or 1, the other set 2 or 3, so 126 stars show at any moment
+ * (MAME video/galaga.c draw_stars, lines 555-560). The cadence on which
+ * the ROM flips those bits is not attested in any source we hold, so the
+ * 32-frame alternation here is authored.
  */
 
 import { FRAME_MS } from './pathcode.js';
+import { STAR_BRIGHTNESS, STAR_SEED, STAR_SPEEDS } from './starData.js';
 
-/** Stars in one hardware set. */
+/** Stars in one hardware set. MAME video/galaga.c:39, "63 stars in each set". */
 export const STAR_COUNT = 63;
 
 /** Sets the chip holds; two are lit at any moment. */
 export const STAR_SETS = 4;
 
 /**
- * How long each blink phase lasts: 32 frames at the cabinet rate, which is
- * the roughly half-second twinkle visible in any capture of the machine.
+ * How long each blink phase lasts. AUTHORED: no source attests the period on
+ * which the ROM flips the set-select bits; 32 frames at the cabinet rate is
+ * the roughly half-second twinkle visible in captures of the machine.
  */
 export const BLINK_PERIOD_MS = 32 * FRAME_MS;
 
 /**
- * Stock scroll speeds, in hardware rows per frame.
+ * The scene scroll states, in field rows per frame. Positive moves stars
+ * down the screen (our axis; MAME scrolls the same table along the rotated
+ * monitor's equivalent axis).
  *
- * A row is 1/256th of the field, so at speed 1 the sky loops in about 4.2
- * seconds. The title drifts; the game streams half again as fast; death
- * stops the field entirely, which the scene drives through
- * `setStarfieldScroll`.
+ * - `title`: attract and between-events freeze the field -- the ROM writes
+ *   star_ctrl 7 (task_man.s:375) and `STAR_SPEEDS[7]` is 0.
+ * - `game`: ship on screen, star_ctrl 1 (gg1-2_fx.s:1414), which indexes
+ *   `STAR_SPEEDS[1]` = -2; the sign is flipped onto our down-positive axis.
+ * - `capture`: the tractor pull reverses the scroll (gg1-3.s l_236D).
  */
-export const STARFIELD_SCROLL = { title: 0.35, game: 0.6 };
+export const STARFIELD_SCROLL = {
+  title: STAR_SPEEDS[7],
+  game: -STAR_SPEEDS[1],
+  capture: STAR_SPEEDS[1],
+};
 
 /**
- * One step of a 16-bit Fibonacci LFSR, taps at bits 16, 14, 13 and 11.
- *
- * Maximal-length: from any non-zero seed it visits all 65535 non-zero
- * states before repeating, which is what makes 252 stars drawn from it look
- * scattered rather than patterned.
+ * A star's rgb colour from its 6-bit table colour: two bits per gun through
+ * the brightness map, ordered BBGGRR from the top bit down.
+ * MAME video/galaga.c:365-375, PALETTE_INIT( galaga ).
  */
-export function lfsrNext(value) {
-  const bit = ((value >> 0) ^ (value >> 2) ^ (value >> 3) ^ (value >> 5)) & 1;
-  return ((value >> 1) | (bit << 15)) & 0xffff;
-}
-
-/**
- * A star's colour from the LFSR bits: two bits per channel, the way the
- * hardware's colour PROM quantises, so the sky is dim multicoloured points
- * rather than uniform white.
- */
-function starColor(value) {
-  const channel = (bits) => [70, 130, 190, 255][bits & 3];
-  const r = channel(value);
-  const g = channel(value >> 2);
-  const b = channel(value >> 4);
+export function starColor(col) {
+  const r = STAR_BRIGHTNESS[col & 3];
+  const g = STAR_BRIGHTNESS[(col >> 2) & 3];
+  const b = STAR_BRIGHTNESS[(col >> 4) & 3];
   return (r << 16) | (g << 8) | b;
 }
 
-/** Run the register on several times between samples. */
-function lfsrStep(value, steps) {
-  let current = value;
-  for (let i = 0; i < steps; i += 1) current = lfsrNext(current);
-  return current;
-}
-
 /**
- * Build the four sets from a seed. Same seed, same sky.
- *
- * Successive register states differ by a single shift, so two adjacent
- * samples are strongly correlated -- taking x and y from neighbouring states
- * draws the sky as diagonal streaks rather than scatter. Stepping the
- * register a different, co-prime number of times before each sample is the
- * whitening that fixes it, which is a stand-in for the hardware's trick of
- * tapping different bits of one free-running register per scanline.
+ * Build the field from the fixed table. No seed: the 05XX always draws the
+ * same sky, which is why two cabinets side by side twinkle identically.
  */
-export function createStarfield(seed = 0xace1) {
-  let value = (seed & 0xffff) || 0xace1;
-  const sets = [];
-
-  for (let set = 0; set < STAR_SETS; set += 1) {
-    const stars = [];
-    for (let star = 0; star < STAR_COUNT; star += 1) {
-      value = lfsrStep(value, 9);
-      const x = value & 0xff;
-      value = lfsrStep(value, 7);
-      const y = (value >> 3) & 0xff;
-      value = lfsrStep(value, 5);
-      stars.push({ x, y, color: starColor(value) });
-    }
-    sets.push(stars);
+export function createStarfield() {
+  const sets = Array.from({ length: STAR_SETS }, () => []);
+  for (const star of STAR_SEED) {
+    sets[star.set].push({ x: star.x, y: star.y, color: starColor(star.col) });
   }
 
   return {
@@ -105,8 +82,10 @@ export function createStarfield(seed = 0xace1) {
     scrollY: 0,
     /** Rows per frame; negative reverses, zero stops. */
     rowsPerFrame: 0,
+    /** The two set-select bits: which of {0,1} and which of {2,3} are lit. */
+    setBitA: 0,
+    setBitB: 0,
     blinkElapsedMs: 0,
-    blinkPhase: 0,
   };
 }
 
@@ -115,35 +94,58 @@ export function setStarfieldScroll(field, rowsPerFrame) {
   return { ...field, rowsPerFrame };
 }
 
-/** Advance scroll and blink by a frame delta. Returns a new field. */
+/**
+ * Set the two set-select bits directly, as the game drove the hardware's
+ * starcontrol[3] and starcontrol[4] lines. Returns a new field.
+ */
+export function setStarfieldSets(field, bitA, bitB) {
+  return { ...field, setBitA: bitA & 1, setBitB: bitB & 1 };
+}
+
+/**
+ * The two lit sets: `set_a = starcontrol[3]`, `set_b = starcontrol[4] | 0x2`
+ * (MAME video/galaga.c:559-560) -- always one of {0,1} plus one of {2,3}.
+ */
+export function litSets(field) {
+  return [field.setBitA, 2 | field.setBitB];
+}
+
+/**
+ * Advance scroll and blink by a frame delta. Returns a new field.
+ *
+ * The authored blink flips BOTH select bits together, alternating the lit
+ * pair (0,2)/(1,3); `setStarfieldSets` can reach the other two legal pairs.
+ */
 export function advanceStarfield(field, deltaMs) {
   const frames = deltaMs / FRAME_MS;
   const scrollY = (((field.scrollY + field.rowsPerFrame * frames) % 256) + 256) % 256;
 
-  let blinkElapsedMs = field.blinkElapsedMs + deltaMs;
-  let blinkPhase = field.blinkPhase;
+  let { blinkElapsedMs, setBitA, setBitB } = field;
+  blinkElapsedMs += deltaMs;
   while (blinkElapsedMs >= BLINK_PERIOD_MS) {
     blinkElapsedMs -= BLINK_PERIOD_MS;
-    blinkPhase = (blinkPhase + 1) % 2;
+    setBitA ^= 1;
+    setBitB ^= 1;
   }
 
-  return { ...field, scrollY, blinkElapsedMs, blinkPhase };
+  return { ...field, scrollY, blinkElapsedMs, setBitA, setBitB };
 }
 
 /**
  * The stars to draw this frame, projected onto a screen.
  *
- * Two of the four sets are lit: sets 0 and 2 in one blink phase, 1 and 3 in
- * the other, which is the alternation that reads as twinkling. The scroll
- * offset moves stars *down* the screen for a ship flying up.
+ * 126 stars: the two lit sets of 63. The scroll offset moves stars *down*
+ * the screen for a ship flying up, and wraps on the 256-row field. MAME
+ * additionally offsets x by +16 and y by +112 inside its %256 wrap
+ * (video/galaga.c:570-572) to align the field with its 224 x 288 visible
+ * area; we project the whole field instead, so those constants are omitted.
  */
 export function visibleStars(field, screen) {
-  const lit = field.blinkPhase === 0 ? [0, 2] : [1, 3];
   const stars = [];
 
-  for (const setIndex of lit) {
+  for (const setIndex of litSets(field)) {
     for (const star of field.sets[setIndex]) {
-      const row = (star.y + field.scrollY) % 256;
+      const row = (((star.y + field.scrollY) % 256) + 256) % 256;
       stars.push({
         x: (star.x / 256) * screen.width,
         y: (row / 256) * screen.height,
