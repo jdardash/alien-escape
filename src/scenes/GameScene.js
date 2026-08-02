@@ -97,6 +97,8 @@ import {
   playerLabel,
 } from '../systems/players.js';
 import { demoInput, DEMO_DURATION_MS } from '../systems/demo.js';
+import { isTap, mergeHeld, padHeld, touchSteer } from '../systems/controls.js';
+import { applyCabinet } from '../art/crt.js';
 import {
   CaptureState,
   CaptureEvent,
@@ -213,6 +215,7 @@ export class GameScene extends Phaser.Scene {
 
     this.isGameOver = false;
     this.isInvulnerable = false;
+    this.frozen = false;
     this.stageResolving = false;
     this.formationElapsed = 0;
     this.challengingHits = 0;
@@ -231,6 +234,9 @@ export class GameScene extends Phaser.Scene {
     this.createHud();
     this.createInput();
     this.registerCollisions();
+
+    // The volume pot and the monitor overlay, as the operator left them.
+    applyCabinet(this, SCREEN);
 
     // Brief grace on the opening spawn so the arriving wave cannot land a hit
     // before the player has had a chance to move.
@@ -493,12 +499,19 @@ export class GameScene extends Phaser.Scene {
       altRight: 'RIGHT',
     });
 
-    // During a demo the controls belong to the machine, and the only thing a
-    // key does is what it does on a cabinet mid-attract: start a real game.
+    // A second touch point, so one finger can steer while another fires.
+    this.input.addPointer(1);
+    this.steerPointer = null;
+
+    // During a demo the controls belong to the machine, and the only thing
+    // any control does is what it does on a cabinet mid-attract: start a
+    // real game. That includes a tap on the glass and a pad's buttons.
     if (this.demo) {
       this.input.keyboard.once('keydown-SPACE', () => this.startRealGame(1));
       this.input.keyboard.once('keydown-ONE', () => this.startRealGame(1));
       this.input.keyboard.once('keydown-TWO', () => this.startRealGame(2));
+      this.input.once('pointerdown', () => this.startRealGame(1));
+      this.input.gamepad?.once('down', () => this.startRealGame(1));
       return;
     }
 
@@ -510,6 +523,85 @@ export class GameScene extends Phaser.Scene {
     this.input.keyboard.on('keydown-SPACE', (event) => {
       if (!event.repeat) this.fire();
     });
+
+    // The freeze switch. The cabinet's DIP sheet has one -- MAME calls it
+    // FREEZE -- and flipping it stops the whole machine mid-frame until it is
+    // flipped back. P is that switch; it is not a menu and it is not stored.
+    this.input.keyboard.on('keydown-P', () => this.toggleFreeze());
+
+    // Touch: the first finger down is the stick -- the ship chases its
+    // column, read per frame in `updatePlayer` -- and any second finger is
+    // the fire button. A finger that comes and goes without steering is a
+    // tap, and a tap is a trigger pull.
+    this.input.on('pointerdown', (pointer) => {
+      if (this.steerPointer === null) {
+        this.steerPointer = pointer;
+        return;
+      }
+      if (pointer !== this.steerPointer) this.fire();
+    });
+    this.input.on('pointerup', (pointer) => {
+      if (pointer !== this.steerPointer) return;
+      this.steerPointer = null;
+      const heldMs = pointer.upTime - pointer.downTime;
+      const movedPx = Math.abs(pointer.x - pointer.downX);
+      if (isTap(heldMs, movedPx)) this.fire();
+    });
+
+    // A pad's face buttons are the fire button; held direction is read per
+    // frame in `updatePlayer` through `padState`.
+    this.input.gamepad?.on('down', (pad, button) => {
+      if (button.index === 0 || button.index === 1) this.fire();
+    });
+  }
+
+  /**
+   * The pad's held direction, flattened to the shape `controls.js` reads.
+   * Null when nothing is connected, which `padHeld` treats as neutral.
+   */
+  padState() {
+    const pad = this.input.gamepad?.getPad(0);
+    if (!pad) return null;
+    return {
+      axisX: pad.axes.length > 0 ? pad.axes[0].getValue() : 0,
+      dpadLeft: pad.left,
+      dpadRight: pad.right,
+    };
+  }
+
+  /**
+   * The freeze switch, thrown or released.
+   *
+   * Freezing is total the way the DIP switch is total: physics, tweens, the
+   * clock and the sound all stop, and nothing advances until the switch is
+   * released. `update` returns immediately while frozen, so the starfield
+   * stops with everything else.
+   */
+  toggleFreeze() {
+    if (this.isGameOver) return;
+    this.frozen = !this.frozen;
+
+    if (this.frozen) {
+      this.physics.world.pause();
+      this.tweens.pauseAll();
+      this.time.paused = true;
+      this.sound.pauseAll();
+      this.freezeLabel = this.add
+        .text(SCREEN.width / 2, SCREEN.height / 2, 'FREEZE', {
+          font: '28px monospace',
+          fill: '#44ff88',
+        })
+        .setOrigin(0.5)
+        .setDepth(40);
+      return;
+    }
+
+    this.physics.world.resume();
+    this.tweens.resumeAll();
+    this.time.paused = false;
+    this.sound.resumeAll();
+    this.freezeLabel?.destroy();
+    this.freezeLabel = null;
   }
 
   // ------------------------------------------------------------------- demo
@@ -1653,7 +1745,7 @@ export class GameScene extends Phaser.Scene {
   // ----------------------------------------------------------------- update
 
   update(_time, delta) {
-    if (this.isGameOver) return;
+    if (this.isGameOver || this.frozen) return;
 
     this.updateStarfield(delta);
     this.formationElapsed += delta;
@@ -1817,11 +1909,23 @@ export class GameScene extends Phaser.Scene {
     // the board and lives in `src/systems/demo.js`. It drives the same fields a
     // player's keys drive, so nothing downstream of here knows the difference --
     // the demo is subject to the two-shot limit, the beam and everything else.
+    // A hand on the keys, a hand on a pad and a finger on the glass all hold
+    // the same two-way stick; `mergeHeld` resolves them the way the leaf
+    // switches would.
     const held = this.demo
       ? demoInput(this.demoBoard())
       : {
-          left: this.keys.left.isDown || this.keys.altLeft.isDown,
-          right: this.keys.right.isDown || this.keys.altRight.isDown,
+          ...mergeHeld(
+            {
+              left: this.keys.left.isDown || this.keys.altLeft.isDown,
+              right: this.keys.right.isDown || this.keys.altRight.isDown,
+            },
+            padHeld(this.padState()),
+            touchSteer(
+              this.steerPointer?.isDown ? this.steerPointer.x : null,
+              this.player.x,
+            ),
+          ),
           fire: false,
         };
 
@@ -1860,8 +1964,9 @@ export class GameScene extends Phaser.Scene {
   fire() {
     // Fired from a key event rather than from `update`, so this has to check
     // for itself that there is a ship to fire from: a dead player between
-    // respawns, or a game already over, would otherwise still shoot.
-    if (this.isGameOver || !this.player.active) return;
+    // respawns, a game already over, or a machine the freeze switch has
+    // stopped, would otherwise still shoot.
+    if (this.isGameOver || this.frozen || !this.player.active) return;
     if (this.bullets.countActive(true) >= bulletLimit(this.captureState)) return;
 
     this.spawnBullet(this.player.x);
@@ -2021,7 +2126,7 @@ export class GameScene extends Phaser.Scene {
         .setOrigin(0, 1)
         .setDepth(20);
 
-      this.lifeIcons.push(applyShipArt(icon, 'player', SHIP_ART.lifeIconPixelSize));
+      this.lifeIcons.push(applyShipArt(icon, 'player', { pixelSize: SHIP_ART.lifeIconPixelSize }));
     }
   }
 

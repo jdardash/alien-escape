@@ -6,8 +6,9 @@ import {
   HEALTHY_BOSS_TINT,
   DAMAGED_BOSS_TINT,
   LOCAL_ART_DIR,
+  OVERRIDABLE_ART,
 } from '../src/art/localArt.js';
-import { SHIP_SPRITES } from '../src/art/pixelArt.js';
+import { SHIP_SPRITES, TRANSFORM_SPRITES } from '../src/art/pixelArt.js';
 
 const full = {
   zako: 'zako.png',
@@ -18,6 +19,26 @@ const full = {
   captive: 'captive.png',
 };
 
+describe('what can be overridden at all', () => {
+  // This is the coverage pin: a new drawable added to the game without an
+  // override name is exact-replication silently going out of reach.
+  it('covers every ship, every transform, both explosions and the beam', () => {
+    expect([...OVERRIDABLE_ART].sort()).toEqual(
+      [
+        ...Object.keys(SHIP_SPRITES),
+        ...Object.keys(TRANSFORM_SPRITES),
+        'explosionEnemy',
+        'explosionPlayer',
+        'beam',
+      ].sort(),
+    );
+  });
+
+  it('has no duplicate names', () => {
+    expect(new Set(OVERRIDABLE_ART).size).toBe(OVERRIDABLE_ART.length);
+  });
+});
+
 describe('reading a local art manifest', () => {
   it('resolves every named ship to a path under the local directory', () => {
     const entries = localArtEntries(full);
@@ -25,18 +46,40 @@ describe('reading a local art manifest', () => {
     expect(entries).toHaveLength(Object.keys(full).length);
     for (const entry of entries) {
       expect(entry.path.startsWith(`${LOCAL_ART_DIR}/`)).toBe(true);
+      expect(entry.frame).toBe(0);
     }
   });
 
   it('can override one ship and leave the rest drawn', () => {
     expect(localArtEntries({ boss: 'boss.png' })).toEqual([
-      { name: 'boss', path: `${LOCAL_ART_DIR}/boss.png` },
+      { name: 'boss', frame: 0, path: `${LOCAL_ART_DIR}/boss.png` },
     ]);
   });
 
-  it('names only ships the game actually draws', () => {
+  it('reads an array as that sprite frame list, in order', () => {
+    expect(localArtEntries({ zako: ['zako_0.png', 'zako_1.png'] })).toEqual([
+      { name: 'zako', frame: 0, path: `${LOCAL_ART_DIR}/zako_0.png` },
+      { name: 'zako', frame: 1, path: `${LOCAL_ART_DIR}/zako_1.png` },
+    ]);
+  });
+
+  it('accepts frame lists for the explosions and the beam', () => {
+    const entries = localArtEntries({
+      explosionEnemy: ['e0.png', 'e1.png', 'e2.png', 'e3.png', 'e4.png'],
+      explosionPlayer: ['p0.png', 'p1.png', 'p2.png', 'p3.png'],
+      beam: ['beam_0.png', 'beam_1.png', 'beam_2.png'],
+      scorpion: ['s0.png', 's1.png'],
+    });
+
+    expect(entries.filter((entry) => entry.name === 'explosionEnemy')).toHaveLength(5);
+    expect(entries.filter((entry) => entry.name === 'explosionPlayer')).toHaveLength(4);
+    expect(entries.filter((entry) => entry.name === 'beam')).toHaveLength(3);
+    expect(entries.filter((entry) => entry.name === 'scorpion')).toHaveLength(2);
+  });
+
+  it('names only art the game actually draws', () => {
     for (const entry of localArtEntries(full)) {
-      expect(SHIP_SPRITES[entry.name]).toBeDefined();
+      expect(OVERRIDABLE_ART).toContain(entry.name);
     }
   });
 
@@ -48,8 +91,21 @@ describe('reading a local art manifest', () => {
 
   it('drops an entry that is not a filename', () => {
     expect(localArtEntries({ boss: 42, player: null, zako: 'zako.png' })).toEqual([
-      { name: 'zako', path: `${LOCAL_ART_DIR}/zako.png` },
+      { name: 'zako', frame: 0, path: `${LOCAL_ART_DIR}/zako.png` },
     ]);
+  });
+
+  // A sprite must never mix ripped and drawn frames -- half a flap from the
+  // cabinet and half from the pixel art reads as a glitch. One bad frame in
+  // a list therefore forfeits the whole list.
+  it('drops the whole frame list when any one frame is bad', () => {
+    expect(localArtEntries({ zako: ['zako_0.png', 42] })).toEqual([]);
+    expect(localArtEntries({ zako: ['zako_0.png', ''] })).toEqual([]);
+    expect(localArtEntries({ zako: ['zako_0.png', '../escape.png'] })).toEqual([]);
+  });
+
+  it('drops an empty frame list rather than an unanimated mystery', () => {
+    expect(localArtEntries({ zako: [] })).toEqual([]);
   });
 
   it('drops an empty filename rather than requesting the directory itself', () => {
@@ -76,6 +132,21 @@ describe('telling a healthy Boss Galaga from a damaged one', () => {
   it('tints the healthy boss when both states share one file', () => {
     expect(needsHealthyBossTint(full)).toBe(false);
     expect(needsHealthyBossTint({ boss: 'boss.png', bossDamaged: 'boss.png' })).toBe(true);
+  });
+
+  it('tints the healthy boss when both states share one frame list', () => {
+    expect(
+      needsHealthyBossTint({
+        boss: ['b0.png', 'b1.png'],
+        bossDamaged: ['b0.png', 'b1.png'],
+      }),
+    ).toBe(true);
+    expect(
+      needsHealthyBossTint({
+        boss: ['b0.png', 'b1.png'],
+        bossDamaged: ['d0.png', 'd1.png'],
+      }),
+    ).toBe(false);
   });
 
   it('leaves two genuinely different boss images alone', () => {

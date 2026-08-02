@@ -23,6 +23,7 @@ import { installSoundBank } from '../audio/soundBank.js';
 import { queueLocalAudio, usingLocalAudio } from '../audio/localAudio.js';
 import { EnemyType } from '../systems/formation.js';
 import { scoreFor } from '../systems/scoring.js';
+import { applyCabinet } from '../art/crt.js';
 
 /**
  * The attract mode.
@@ -75,6 +76,10 @@ export class TitleScene extends Phaser.Scene {
     // and the start buttons want credits, which the C key inserts.
     this.dips = loadDips(this.storage);
     this.coinBox = createCoinBox();
+
+    // The volume pot and the monitor, applied before the theme starts so the
+    // attract loop plays at the volume the operator set.
+    applyCabinet(this, SCREEN);
 
     // The 63-star hardware field, drifting at attract speed. Drawn a frame
     // at a time into one Graphics object; see `src/systems/starfield.js`.
@@ -129,6 +134,15 @@ export class TitleScene extends Phaser.Scene {
     // put across games and reloads. F2 opens the rest of the switch block.
     this.input.keyboard.on('keydown-R', () => this.cycleRank());
     this.input.keyboard.on('keydown-F2', () => this.openService());
+
+    // The same two start buttons for a finger or a pad. A tap is 1P START --
+    // the touch player's whole interface is the glass -- and a pad's start
+    // or face button is 1P START too, which is what a cabinet's most-worn
+    // button always is.
+    this.input.on('pointerdown', () => this.startGame(1));
+    this.input.gamepad?.on('down', (pad, button) => {
+      if (button.index === 8 || button.index === 9 || button.index === 0) this.startGame(1);
+    });
   }
 
   /**
@@ -287,7 +301,7 @@ export class TitleScene extends Phaser.Scene {
 
   ship(x, y, name, pixelSize = SHIP_ART.pixelSize) {
     const image = this.add.image(x, y, shipTextureKey(name, pixelSize));
-    return this.own(applyShipArt(image, name, pixelSize));
+    return this.own(applyShipArt(image, name, { pixelSize }));
   }
 
   // ----------------------------------------------------------------- panels
