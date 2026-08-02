@@ -280,6 +280,25 @@ export const SPRITE_SCALE = {
   playerExplosion: 102.4 / SPRITE_SOURCE_PX,
 };
 
+/**
+ * The animation clock.
+ *
+ * `flapMs` is one wing frame's dwell: the cabinet toggles the formation's
+ * wings every 32 hardware frames, 533ms at 60Hz, and the whole board reads
+ * the same clock. `rotationSteps` is the sprite hardware's truth -- sixteen
+ * pre-drawn orientations, no in-betweens. The explosion dwells put the enemy
+ * burst at a third of a second and the player's death at just over a second,
+ * which are the cabinet's own proportions.
+ */
+export const ANIMATION = {
+  flapMs: 533,
+  rotationSteps: 16,
+  enemyExplosionFrameMs: 66,
+  playerExplosionFrameMs: 270,
+  /** Full turns a tractored or rescued fighter spins through. */
+  spinTurns: 2,
+};
+
 /** Enemy hit points. A Boss Galaga survives its first hit. */
 export const ENEMY_HEALTH = {
   boss: 2,
