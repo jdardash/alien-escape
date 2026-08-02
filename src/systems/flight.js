@@ -88,8 +88,12 @@ export function isLiveFlight(flight) {
 /**
  * Advance a live flight by a frame delta against the live context, given in
  * SCREEN coordinates: `{ playerX, homeTarget, stage8Switch, stage12Switch,
- * continuousBombing }`. Returns the next flight and the events the frames
- * raised (`armBombs`, `homed`, `cloneSplit`, `captureAim`, `status3`).
+ * continuousBombing, frameCount }`. `frameCount` is the caller's GLOBAL
+ * hardware-frame counter (`ds3_92A0_frame_cts`): its parity drives the
+ * interpreter's vx/vy alternation, so every flight fed the same counter
+ * switches axes in lockstep the way the ROM's slots do. Returns the next
+ * flight and the events the frames raised (`armBombs`, `homed`,
+ * `cloneSplit`, `captureAim`, `status3`).
  */
 export function advanceLiveFlight(flight, deltaMs, context = {}) {
   const state = cloneFlightState(flight.state);
@@ -102,6 +106,7 @@ export function advanceLiveFlight(flight, deltaMs, context = {}) {
     stage8Switch: context.stage8Switch ?? false,
     stage12Switch: context.stage12Switch ?? false,
     continuousBombing: context.continuousBombing ?? false,
+    frameCount: context.frameCount,
   };
 
   // The tiny epsilon keeps an exact multiple of FRAME_MS from losing a
@@ -113,6 +118,7 @@ export function advanceLiveFlight(flight, deltaMs, context = {}) {
   const events = [];
   while (frames > 0 && !state.done) {
     events.push(...stepFlight(state, romContext));
+    if (romContext.frameCount !== undefined) romContext.frameCount += 1;
     frames -= 1;
   }
 

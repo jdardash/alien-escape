@@ -121,14 +121,15 @@ export function normalizeRank(rank) {
 /**
  * The arcade's entrance row for a stage (the `si` of c_25A2, gg1-3.s:1180-1212).
  *
- * Wrap anything past 0x17 back by four until it is inside the table -- the
- * endless game cycles its last four combat configurations -- then take
- * `stage - stage/4 - 1`, which counts COMBAT stages: a challenging stage
- * assembles no formation and consumes no row.
+ * Wrap anything at or past 0x17 back by four until it is below -- the loop
+ * head `l_25AC_while` is `cp #0x17 / jr c` (gg1-3.s:1182-1186), so 0x17
+ * itself wraps too; the endless game cycles its last four combat
+ * configurations. Then take `stage - stage/4 - 1`, which counts COMBAT
+ * stages: a challenging stage assembles no formation and consumes no row.
  */
 export function combatStageIndex(stage) {
   let wrapped = stage;
-  while (wrapped > 0x17) wrapped -= 4;
+  while (wrapped >= 0x17) wrapped -= 4;
 
   const row = wrapped - Math.floor(wrapped / 4) - 1;
   return Math.min(Math.max(row, 0), COMBAT_STAGE_ROWS - 1);

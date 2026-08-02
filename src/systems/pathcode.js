@@ -367,11 +367,13 @@ function fetch(state, context, events) {
         break;
 
       case 0xf4: {
-        // Capture aim (case_0A53): clamp the player's sprite X to the beam
-        // band, aim down toward it at dive depth raw 0x48, and arm the
-        // capture monitor (emitted as a `captureAim` event; `capture.js`
-        // anchors the beam on it).
-        const clamped = Math.min(Math.max(playerSpriteX(context), 0x29), 0xc9);
+        // Capture aim (case_0A53): snap the player's sprite X onto the beam
+        // grid -- `((x + 3) & 0xF8) | 1` (gg1-5.s:1728-1731, the add/and/inc
+        // chain) -- THEN clamp it to the beam band, aim down toward it at
+        // dive depth raw 0x48, and arm the capture monitor (emitted as a
+        // `captureAim` event; `capture.js` anchors the beam on it).
+        const snapped = ((((playerSpriteX(context) + 3) & 0xff) & 0xf8) | 1) & 0xff;
+        const clamped = Math.min(Math.max(snapped, 0x29), 0xc9);
         const dx = clamped / 2 - state.xFixed / 256;
         const dy = 0x48 - state.yFixed / 256;
         state.angle = directionToAngle(dx, dy);
@@ -473,18 +475,20 @@ function fetch(state, context, events) {
 /**
  * The octant motion update (gg1-5.s:2150-2270) -- NOT a circular cos/sin.
  *
- * The magnitude `A` alternates between vx and vy by frame parity. The axis
- * nearer the heading (selected by angle bit7 XOR bit8) receives the FULL
- * magnitude, `A << 7` on the fixed-point coordinate; the other axis receives
- * the `c_0E97` product `A * L`, where L folds the low angle byte onto the
- * nearer axis (0-127). Primary is negated over 135-315 degrees (octants
- * 3-6), the secondary in octants 2, 4, 5 and 7. Net: speed is `A` canvas
- * px/frame axis-aligned and grows toward ~A*sqrt(2) on the diagonals, which
- * is why the circular stand-in this replaced ran fly-ins 30-40% slow.
+ * The magnitude `A` alternates between vx and vy by the parity of the
+ * GLOBAL frame counter (`ds3_92A0_frame_cts`, gg1-5.s:2151-2158: odd frames
+ * take 0x0A(ix) = vx, even take 0x0B(ix) = vy), so every slot on the board
+ * switches axes in lockstep. The axis nearer the heading (selected by angle
+ * bit7 XOR bit8) receives the FULL magnitude, `A << 7` on the fixed-point
+ * coordinate; the other axis receives the `c_0E97` product `A * L`, where L
+ * folds the low angle byte onto the nearer axis (0-127). Primary is negated
+ * over 135-315 degrees (octants 3-6), the secondary in octants 2, 4, 5 and
+ * 7. Net: speed is `A` canvas px/frame axis-aligned and grows toward
+ * ~A*sqrt(2) on the diagonals, which is why the circular stand-in this
+ * replaced ran fly-ins 30-40% slow.
  */
-function moveState(state) {
-  const A = state.frame & 1 ? state.vx : state.vy;
-  state.frame += 1;
+function moveState(state, frameCount) {
+  const A = frameCount & 1 ? state.vx : state.vy;
   if (A === 0) return;
 
   const angle = state.angle & (ANGLE_UNITS - 1);
@@ -517,10 +521,14 @@ function moveState(state) {
  *                  the drift the way `case_2422` re-syncs it
  * - `stage8Switch`, `stage12Switch` from the stage's difficulty row
  * - `continuousBombing` from the attack scheduler (the FA gate)
+ * - `frameCount`   the GLOBAL hardware frame counter (`ds3_92A0_frame_cts`),
+ *                  whose parity picks vx or vy this frame; absent, the
+ *                  slot's own step count stands in
  *
- * Order is the Z80's: timer/fetch, homing check, FC check, angle update,
- * motion -- and the F8/F9/F1/F6/F0/EF `l_0B8B` finalize ends the frame with
- * no motion at all, the ROM's one-frame stall.
+ * Order is the Z80's: timer/fetch, homing check, FC check, motion on the
+ * pre-increment angle, then the angle update -- and the F8/F9/F1/F6/F0/EF
+ * `l_0B8B` finalize ends the frame with no motion at all, the ROM's
+ * one-frame stall.
  */
 export function stepFlight(state, context = {}) {
   const events = [];
@@ -562,18 +570,27 @@ export function stepFlight(state, context = {}) {
   }
 
   // FC dive reference (l_0C2D): reaching the stored row expires the segment
-  // on the next frame. The Z80 window is "equal or one raw past".
+  // on the next frame. The Z80 compares the INTEGER position byte 0x01(ix)
+  // against the reference (gg1-5.s:2060-2064: `sub 0x06(ix)`, expire on 0,
+  // `inc a`, expire on -1), so the window is floor(rawY) in {ref-1, ref}.
   if (state.diveArmed) {
-    const rawY = state.yFixed / 256;
-    if (rawY <= state.diveRefRawY && rawY > state.diveRefRawY - 2) {
+    const intY = Math.floor(state.yFixed / 256);
+    if (intY === state.diveRefRawY || intY === state.diveRefRawY - 1) {
       state.segTimer = 1;
       state.diveArmed = false;
     }
   }
 
-  // Angle, then the octant move (l_0C46 onward).
+  // The octant move, then the angle update (l_0C46 onward): the Z80 stores
+  // `angle + rotRate` first but moves on the registers it saved BEFORE the
+  // add (E/D loaded at gg1-5.s:2081-2086, consumed at 2170-2181), so motion
+  // rides the PRE-increment angle. Move-then-add is the same machine with
+  // one copy of the state. The parity source is the context's global frame
+  // counter; the per-slot count stands in for standalone states.
+  const frameCount = context.frameCount ?? state.frame;
+  state.frame += 1;
+  moveState(state, frameCount);
   state.angle = (state.angle + state.rotRate) & (ANGLE_UNITS - 1);
-  moveState(state);
 
   return events;
 }

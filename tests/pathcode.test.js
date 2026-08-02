@@ -181,6 +181,31 @@ describe('the octant motion model', () => {
     expect(y2).toBeGreaterThan(y1);
   });
 
+  it('reads the GLOBAL frame counter for the parity when the context carries one', () => {
+    // gg1-5.s:2151-2158: `ld a,(ds3_92A0_frame_cts)` -- odd frames take vx,
+    // even take vy, whatever the slot's private step count says.
+    const odd = stateFor([0x04, 0x00, 0x10, 0xff], { angle: 768 });
+    const y0 = toCanvas(odd).y;
+    stepFlight(odd, { frameCount: 1 }); // odd -> A = vx = 4: moves at once
+    expect(toCanvas(odd).y).toBeGreaterThan(y0);
+
+    const even = stateFor([0x04, 0x00, 0x10, 0xff], { angle: 768 });
+    stepFlight(even, { frameCount: 2 }); // even -> A = vy = 0: holds
+    expect(toCanvas(even).y).toBe(y0);
+  });
+
+  it('moves on the PRE-increment angle: the frame a turn starts still moves straight', () => {
+    // l_0C46 stores angle + rotRate but the octant move consumes the E/D
+    // registers saved before the add (gg1-5.s:2081-2086, 2170-2181). With
+    // rot 0x40 from angle 0, the first frame's motion is pure +x; the
+    // stored angle is already 0x40 for the next frame.
+    const state = stateFor([0x11, 0x40, 0x04, 0xff], { angle: 0 });
+    stepFlight(state, { frameCount: 1 }); // odd -> A = vx = 1
+    expect(state.angle).toBe(0x40);
+    expect(state.xFixed).toBe(0x40 * 256 + 128);
+    expect(state.yFixed).toBe(0x80 * 256);
+  });
+
   it('mirrors a turning flight about its spawn under negate-rotation', () => {
     // Same spawn, canvas-down start: the negated twin reflects about the
     // spawn column. The octant fold is one count asymmetric (L vs 127-L),
@@ -374,6 +399,23 @@ describe('token semantics', () => {
     expect(state.done).toBe(true);
   });
 
+  it('FC triggers on the INTEGER row: floor(rawY) equal to the reference or one below', () => {
+    // The Z80 compares the integer position byte 0x01(ix) (gg1-5.s:2060-2064:
+    // expire on 0 or -1), so a fractional overshoot of the row still fires
+    // and anything whose integer part is past ref+1 or below ref-2 does not.
+    const armed = (rawY) => {
+      const state = stateFor([0x00, 0x00, 0x10, 0xff], { rawY });
+      state.diveArmed = true;
+      state.diveRefRawY = 0x60;
+      stepFlight(state, {});
+      return state.diveArmed;
+    };
+    expect(armed(0x60 + 0.5)).toBe(false); // floor 0x60 == ref: fires
+    expect(armed(0x5f + 0.75)).toBe(false); // floor 0x5F == ref - 1: fires
+    expect(armed(0x61 + 0.25)).toBe(true); // floor 0x61: outside the window
+    expect(armed(0x5e + 0.9)).toBe(true); // floor 0x5E: outside the window
+  });
+
   it('F6 sets free-flight heading from its argument and arms bombing', () => {
     const state = stateFor([0xf6, 0xc0, 0x23, 0x00, 0x08, 0xff]);
     const events = run(state, 2, {});
@@ -412,13 +454,22 @@ describe('token semantics', () => {
   });
 
   it('F4 aims down toward the clamped player column and raises the capture event', () => {
+    // playerX 200 -> sprite X 210 -> snap 0xD1, past the band -> clamp 0xC9.
     const state = stateFor([0xf4, 0x12, 0x00, 0x04, 0xff], { rawX: 0x40, rawY: 0x80 });
-    const events = [...stepFlight(state, { playerX: 500 })];
+    const events = [...stepFlight(state, { playerX: 200 })];
     const aim = events.find((e) => e.type === 'captureAim');
     expect(aim.targetSpriteX).toBe(0xc9); // clamped to the beam band
     // Heading points into the canvas-down half.
     expect(state.angle).toBeGreaterThan(512);
     expect(state.angle).toBeLessThan(1024);
+  });
+
+  it('F4 snaps the in-band aim onto the beam grid: ((x + 3) & 0xF8) | 1', () => {
+    // case_0A53 (gg1-5.s:1728-1731): add 3, mask to the 8-px grid, set the
+    // low bit. playerX 118 -> sprite X 128 -> (131 & 0xF8) | 1 = 0x81.
+    const state = stateFor([0xf4, 0x12, 0x00, 0x04, 0xff]);
+    const events = [...stepFlight(state, { playerX: 118 })];
+    expect(events.find((e) => e.type === 'captureAim').targetSpriteX).toBe(0x81);
   });
 
   it('F2 emits a clone running the same region at the embedded offset', () => {

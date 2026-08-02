@@ -424,9 +424,10 @@ describe('the capture flights', () => {
       if (aim && state.vx === 0 && state.vy === 0 && !state.done) stalled = true;
     }
 
-    // The aim is the player's sprite X clamped to the beam lane, once.
+    // The aim is the player's sprite X snapped onto the beam grid --
+    // ((x + 3) & 0xF8) | 1, case_0A53 -- then clamped to the beam lane, once.
     expect(aim).not.toBeNull();
-    expect(aim.targetSpriteX).toBe(Math.min(Math.max(90 + 10, 0x29), 0xc9));
+    expect(aim.targetSpriteX).toBe(Math.min(Math.max(((90 + 10 + 3) & 0xf8) | 1, 0x29), 0xc9));
     // The `00 FC FF` stall: the boss stops translating low on the field.
     expect(stalled).toBe(true);
     expect(toCanvas(state).y).toBeGreaterThan(190);

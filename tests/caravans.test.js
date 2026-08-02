@@ -205,9 +205,18 @@ describe('the combat stage index', () => {
     }
   });
 
-  it('wraps past stage 23 by four, as the ROM does', () => {
+  it('wraps from stage 23 by four, as the ROM does', () => {
     expect(combatStageIndex(24)).toBe(combatStageIndex(20));
     expect(combatStageIndex(28)).toBe(combatStageIndex(20));
+  });
+
+  it('wraps stage 0x17 itself: the l_25AC compare is cp/jr c, so >= 0x17 steps back', () => {
+    // gg1-3.s:1182-1186: `cp #0x17 / jr c` exits only BELOW 0x17, so stage
+    // 0x17 (23) wraps to 0x13 (19) -> row 19 - 19/4 - 1 = 14; and stage 22
+    // stays put on row 16, the table's last.
+    expect(combatStageIndex(0x17)).toBe(combatStageIndex(0x13));
+    expect(combatStageIndex(0x17)).toBe(14);
+    expect(combatStageIndex(0x16)).toBe(16);
   });
 });
 
