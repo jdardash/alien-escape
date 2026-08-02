@@ -138,6 +138,13 @@ rotation applies ONLY to the difficulty table. The fly-in caravan index table
 **4** stages (24-27, one of them a challenge row) repeat forever. Not a clamp to
 the final row.
 
+> **Correction (2026-08-02, found while re-verifying for fidelity pass 6):** the
+> compare is `cp #0x1B / jr c` (new_stage.s:32-33), which exits the loop only when
+> the stage is BELOW 0x1B — so the condition is `while (stage >= 0x1B)`, and stage
+> 27 itself is adjusted (27 plays 23). The repeating four are stages **23-26**
+> (0x17-0x1A), not 24-27. The port's `adjustedStage` (src/systems/difficulty.js:56)
+> implements the `>=` form.
+
 ### 1.5 Initial launch timers are NOT in the table
 
 `c_2C00` (new_stage.s:100-103) hardcodes `b_92C0[0]=0x16 (boss), [1]=0x02 (red),

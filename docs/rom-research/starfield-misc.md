@@ -37,6 +37,17 @@ e.g. `task_man.s`, `gg1-2_fx.s`, `gg1-3.s`; hardware facts from MAME
     toggles starcontrol[3]/[4] appears anywhere in these files. The clone (zanelogi) has
     "no blink" at all (research_starfield.md:99); our 32-frame period is authored, and the
     corpus neither confirms nor refutes it.
+
+    > **Correction (2026-08-02, found while porting the star control for fidelity
+    > pass 6):** the cadence IS attested — in the disassembly itself, not the corpus
+    > notes. `jp_Task_man` derives the two select bits from the global frame counter
+    > every interrupt (task_man.s:362-368): bits 2-4 of `ds3_92A0_frame_cts` are
+    > folded through `(c >> 1) ^ c` and masked to bits 3-4, which lands `f3 ^ f4` on
+    > starcontrol[3] and `f4` on starcontrol[4]. That walks the lit pair through the
+    > Gray cycle (0,2) -> (1,2) -> (1,3) -> (0,3), one step every 8 frames, all four
+    > legal pairs reached and only one set changing per step. The replica's
+    > `blinkBits` (src/systems/starfield.js) now implements exactly this; the
+    > 32-frame both-bits toggle it replaced was authored and wrong.
 - **One scroll speed — no parallax:** "One vertical scroll speed (the `$A000` bits) —
   **no parallax** in hardware." (research_starfield.md:72)
 
@@ -76,6 +87,21 @@ static const int map[4] = { 0x00, 0x47, 0x97, 0xde };
   and task_man.s says only bit 0 of the port value is significant, which argues against a
   meaningful per-stage speed ramp in hardware. Treat the 1-4 speed claim as unverified.
 
+  > **Correction (2026-08-02, found while porting the star control for fidelity
+  > pass 6):** the per-stage ramp is REAL and fully attested, and "control value 1"
+  > above conflates two bytes. `ds_99B9_star_ctrl` is a six-byte block (mrw.s:536-542):
+  > +0 is only the scroll ENABLE (1 while the fighter is on the board), while +2 is
+  > the stage's speed control, written by `c_2C00` as
+  > `0x40 + ((min(stage, 0x10) << 2) & 0x70)` (new_stage.s:105-117). Each frame
+  > `f_1D76` (gg1-2_fx.s:1414-1453) ramps 99BC toward that control at +1 and adds it
+  > into the 6-bit accumulator 99BD; the sum's two carry bits (0-3 rows) become the
+  > hardware value `(-v - 1) & 7` in star_ctrl+5 — indices 7/6/5/4, whose MAME
+  > speeds are 0/1/2/3 rows forward. Net: play speed averages control/64 rows per
+  > frame, 1.0 at stage 1 rising to 2.0 at stage 16+, dithered by the accumulator;
+  > and the enable-off path (l_1DA8) zeroes 99BC/99BD, so the scroll re-ramps from
+  > a standstill after every death. Absolute px/frame IS therefore derivable, and
+  > the replica's `advanceStarfield` now runs this machine verbatim.
+
 ### 1.4 Capture scroll reversal (verified, gg1-3.s + gg1-2_fx.s:1423-1447)
 
 During the tractor-beam **pull**, stars scroll UP. Flag `star_ctrl[1]` (RAM `99BA`):
@@ -91,6 +117,23 @@ down-scroll. Toggle points (research_starfield.md table, :36-40):
 
 Verified reversibility property (research_starfield.md:86-88): a 40-frame down-scroll then an
 equal up-scroll returns the field **exactly** to its start (63/63 stars).
+
+> **Correction (2026-08-02, found while porting the star control for fidelity
+> pass 6):** two refinements to this section.
+>
+> 1. The reverse path's speed is pinned, not merely "the reverse direction":
+>    `A = 0xFD` through `neg / dec / and 7` (gg1-2_fx.s:1425,1444-1450) yields
+>    hardware index **2**, and MAME's `speeds[2]` is **-3** — the pull runs three
+>    rows per frame upward, faster than any forward play speed (1-2 rows). The
+>    down-then-up restore property holds for equal ROWS, not equal frame counts.
+> 2. The scrolled axis is the chip's hardware **X** — the raster's horizontal,
+>    mounted vertical in the portrait cabinet. MAME adds `speeds[]` to
+>    `stars_scrollx` and draws `x = (tab.x + scroll) % 256` with `tab.y` fixed
+>    (historic video/galaga.c:570-571,606); the modern `starfield_05xx` device
+>    wires the game's three control lines to SCROLL_X likewise. A replica that
+>    scrolls the table's y is transposed: the seed table's x is the
+>    screen-vertical, scrolled coordinate. `visibleStars`
+>    (src/systems/starfield.js) now projects it that way.
 
 ### 1.5 Field geometry
 

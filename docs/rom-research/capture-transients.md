@@ -175,6 +175,18 @@ fire + collision re-enabled. 2-ship mode = dual fire + double-wide hitbox
 
 ## 2. Transients (slots 0x38-0x3E) — REPLICA HAS NOTHING
 
+> **Correction (2026-08-02, fidelity pass 6): the headline is obsolete.** The
+> transient subsystem has since been built: `compileCaravanStream`
+> (src/systems/caravans.js) runs the `l_2612` insertion byte-for-byte — count
+> and type bits from the caravan control byte, RNG slot placement with
+> collision re-roll, IDs `(b << 1) | 0x38` with the `0x40` redmoth flag —
+> `decodeLaunch` maps IDs 0x38-0x3E to yellowbee/redmoth/boss transients that
+> never bomb, the F7 gate in the path interpreter (src/systems/pathcode.js)
+> branches exactly the caravan fly-through members onto their swoop sub-paths,
+> and `spawnWaveMember` (src/scenes/GameScene.js) spawns them as gridless
+> enemies that despawn at their FF. The section BODY below remains the
+> authoritative description of the ROM machine and is unchanged.
+
 **What they are:** from **stage 4**, extra caravan members that fly in
 alongside a formation pair, make **one player-targeted swoop, and leave —
 they never join the grid** (disassembler's own comment, gg1-3.s:1806). The
@@ -255,6 +267,12 @@ ignored, there are no reserved-slot extras, no F7/FE analog, no
 player-region swoop-and-leave members. From stage 4 onward the arcade's combat
 waves visibly contain more enemies than ever land in the grid; our stages do
 not. **This is a whole missing subsystem.**
+
+> **Correction (2026-08-02, fidelity pass 6): no longer true — see the note at
+> the top of section 2.** The control byte is consumed, the reserved-slot
+> transients launch, F7 and FE run in the interpreter, and the swoop-and-leave
+> members fly and despawn. Kept as written for the record of what the audit
+> found at the time.
 
 ---
 
