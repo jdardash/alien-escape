@@ -71,3 +71,96 @@ export function challengeResultSound(hits, total) {
 export function playerShotSound(shotCount) {
   return shotCount % 2 === 0 ? 'fighterShot1' : 'fighterShot2';
 }
+
+/**
+ * Which WSG voices each sound occupies, after the sound CPU's own parameter
+ * table (`d_0703_snd_parms`, gg1-7.s:1376-1399).
+ *
+ * The cabinet has one Namco WSG with three voices, plus the 54XX discrete
+ * circuit for explosion noise. Every effect in that table claims either one
+ * fixed voice or all three (the tunes), and starting an effect overwrites the
+ * registers of the voices it claims: the hardware cannot stack two sounds on
+ * a voice, which is why the real machine never turns into a pile of
+ * overlapping tails. Same rule here -- shots on voice 0, the enemy cries on
+ * voice 1, the tractor beam on voice 2, every tune takes the whole chip.
+ *
+ * The empty entries sit outside the contention on the cabinet too:
+ * `explosion` is the 54XX circuit, and `ambient`/`enemyDive` stand in for
+ * effects the game re-requests every frame -- on hardware a tune talks over
+ * them and they resume by re-request; here they are loops the scenes gate,
+ * and stopping them for a tune would silence them for good.
+ */
+export const SOUND_VOICES = Object.freeze({
+  fighterShot1: [0],
+  fighterShot2: [0],
+  enemyFire: [0],
+  coin: [0],
+  zakoDeath: [1],
+  goeiDeath: [1],
+  bossHit: [1],
+  bossDeath: [1],
+  beamOpen: [2],
+  beamCapture: [2],
+  playerDeath: [0, 1, 2],
+  bossEntrance: [0, 1, 2],
+  captured: [0, 1, 2],
+  rescued: [0, 1, 2],
+  stageFlag: [0, 1, 2],
+  challengeStart: [0, 1, 2],
+  challengeClear: [0, 1, 2],
+  challengePerfect: [0, 1, 2],
+  challengeMiss: [0, 1, 2],
+  transformSet: [0, 1, 2],
+  extraLife: [0, 1, 2],
+  theme: [0, 1, 2],
+  gameStart: [0, 1, 2],
+  highScoreEntry: [0, 1, 2],
+  gameOverTune: [0, 1, 2],
+  explosion: [],
+  ambient: [],
+  enemyDive: [],
+});
+
+/**
+ * The playing sounds a new sound silences: every one holding a voice the new
+ * sound is about to write over. Pure, so the preemption rule is testable
+ * without a Phaser sound manager.
+ */
+export function soundsSilencedBy(name, playingNames) {
+  const voices = SOUND_VOICES[name] ?? [];
+  if (voices.length === 0) return [];
+
+  return playingNames.filter(
+    (other) => other !== name && (SOUND_VOICES[other] ?? []).some((voice) => voices.includes(voice)),
+  );
+}
+
+/**
+ * The scene's sound bank with the cabinet's voice contention applied.
+ *
+ * A drop-in for the plain name-to-Sound map the scenes used to build: each
+ * entry still answers `play`, `stop` and `isPlaying`, but `play` first stops
+ * whatever holds the voices the sound needs, which is exactly what writing
+ * the WSG registers did. Playing a sound already playing restarts it -- one
+ * instance per name, never a stack.
+ */
+export function channelledSoundBank(soundManager) {
+  const instances = new Map(SOUND_NAMES.map((name) => [name, soundManager.add(name)]));
+  const playingNames = () => SOUND_NAMES.filter((name) => instances.get(name).isPlaying);
+
+  const bank = {};
+  for (const name of SOUND_NAMES) {
+    const instance = instances.get(name);
+    bank[name] = {
+      play(config) {
+        for (const other of soundsSilencedBy(name, playingNames())) instances.get(other).stop();
+        return instance.play(config);
+      },
+      stop: () => instance.stop(),
+      get isPlaying() {
+        return instance.isPlaying;
+      },
+    };
+  }
+  return bank;
+}

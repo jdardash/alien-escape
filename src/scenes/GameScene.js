@@ -25,7 +25,6 @@ import {
   SHIP_DRAWN_PX,
   SPRITE_SCALE,
   SPRITE_SOURCE_PX,
-  TRANSFORM,
   ANIMATION,
   FLAG_ART,
 } from '../config.js';
@@ -55,18 +54,17 @@ import {
   caravanHeaderFor,
 } from '../systems/caravans.js';
 import {
-  divePath,
   returnPath,
-  captiveEscapePath,
   entrySpawnPoint,
   createEntryFlightState,
   createDiveFlightState,
+  createCarryHomeFlightState,
+  createConvoyLeaderFlightState,
 } from '../systems/paths.js';
 import {
   createFlight,
   advanceFlight,
   isFlightComplete,
-  flightProgress,
   flightTransform,
   createLiveFlight,
   advanceLiveFlight,
@@ -80,14 +78,18 @@ import {
   BOMB_DROP_MIN_Y,
   BOMB_FALL_PER_FRAME,
   BOMB_SPACING_FRAMES,
+  BONUS_BEE_FLASH_FRAMES,
+  BONUS_BEE_FLASH_PERIOD_FRAMES,
   advanceNoFire,
   advanceScheduler,
   bombAimVx,
+  bonusBeeFlashOn,
+  bonusBeeGateOpen,
   createAttackScheduler,
   createNoFireState,
   nextBombDrop,
 } from '../systems/attack.js';
-import { FRAME_MS, PATHCODE_FPS } from '../systems/pathcode.js';
+import { FRAME_MS, PATHCODE_FPS, angleToRadians } from '../systems/pathcode.js';
 import { DIP_DEFAULTS, bonusSchemeFor, loadDips } from '../systems/dips.js';
 import {
   STARFIELD_SCROLL,
@@ -110,7 +112,6 @@ import {
   stageDifficulty,
   stageFlags,
   enemiesBomb,
-  captureAllowed,
   transformTypeFor,
   RANK_NAMES,
   nextStage,
@@ -134,7 +135,14 @@ import {
   isBeamDangerous,
   hasDualFighter,
   bulletLimit,
-  captiveCanBomb,
+  beamTimings,
+  beamCatches,
+  createPull,
+  advancePull,
+  BEAM_STRIPS,
+  BEAM_CATCH_HALF_WIDTH,
+  PULL_SPIN_STEP,
+  SETTLE_FRAMES,
 } from '../systems/capture.js';
 import { resolveStorage, loadScoreTable, loadRank } from '../systems/persistence.js';
 import {
@@ -145,6 +153,7 @@ import {
   explosionTextureKey,
   flagTextureKey,
   shipTextureKey,
+  transformTextureKey,
   FLAG_DRAWN_WIDTH,
 } from '../art/textures.js';
 import { applyShipArt, localArtFrames, queueLocalArt } from '../art/localArt.js';
@@ -153,8 +162,8 @@ import { installSoundBank } from '../audio/soundBank.js';
 import { queueLocalAudio } from '../audio/localAudio.js';
 import { recordShot, recordHit } from '../systems/stats.js';
 import {
-  SOUND_NAMES,
   challengeResultSound,
+  channelledSoundBank,
   deathSoundFor,
   playerShotSound,
 } from '../systems/audio.js';
@@ -174,6 +183,13 @@ import {
  * and speeds are ROM-denominated in `attack.js` and converted here.
  */
 const ROM_TO_SCREEN = SCREEN.height / 288;
+
+/**
+ * Stage-band transform types onto the convoy's colour indices -- the
+ * `d_1B5F` order: colour 0 flies `db_04EA` (Scorpion band), 1 `db_0473`
+ * (Spy Ship), 2 `db_04AB` (Flagship).
+ */
+const TRANSFORM_COLOURS = { scorpion: 0, spyShip: 1, flagship: 2 };
 
 export class GameScene extends Phaser.Scene {
   constructor() {
@@ -367,6 +383,9 @@ export class GameScene extends Phaser.Scene {
     this.clearDualFighter();
     this.clearBeam();
     this.captor = null;
+    this.pull = null;
+    this.beamRomX = null;
+    this.captiveSettled = false;
     this.captureState = CaptureState.IDLE;
     this.sfx.enemyDive.stop();
 
@@ -399,7 +418,14 @@ export class GameScene extends Phaser.Scene {
     // left where it is. See `src/audio/soundBank.js`.
     installSoundBank(this);
 
-    this.sfx = Object.fromEntries(SOUND_NAMES.map((key) => [key, this.sound.add(key)]));
+    // The ROM pokes `sound_mgr_reset` (b_9AA0+$17, game_ctrl.s:283) the moment
+    // a game starts, so whatever the results screen or the attract loop left
+    // playing dies here rather than running under the new board.
+    this.sound.stopAll();
+
+    // One instance per sound, with the cabinet's WSG voice contention applied:
+    // a new sound stops whatever holds its voices instead of stacking over it.
+    this.sfx = channelledSoundBank(this.sound);
 
     // Galaga plays a low pulse under the whole board. It is the thing that
     // makes a cleared screen feel quiet, so it runs for as long as the scene
@@ -713,7 +739,9 @@ export class GameScene extends Phaser.Scene {
         .map((enemy) => ({ x: enemy.x, y: enemy.y })),
       beam:
         this.beam && isBeamDangerous(this.captureState)
-          ? { x: this.beam.x, width: CAPTURE.beamWidth }
+          ? // The pilot dodges the CATCH window, which is a shade wider than
+            // the drawn cone: +/-27 ROM px through the screen adapter.
+            { x: this.beam.x, width: BEAM_CATCH_HALF_WIDTH * 2 * ROM_TO_SCREEN }
           : null,
     };
   }
@@ -730,7 +758,11 @@ export class GameScene extends Phaser.Scene {
       // guard is what keeps the bonus round a bonus.
       if (this.challenging) return;
       if (!this.canBeHurt() || !enemy.active) return;
+      // Ramming a captor that owns a slave is a kill without the rescue
+      // conditions: the slave is orphaned rather than stranded in HELD.
+      const orphans = enemy.captiveAttached === true;
       this.destroyEnemy(enemy, false);
+      if (orphans) this.loseCaptive(RescueOutcome.ORPHANED);
       this.onPlayerHit();
     });
 
@@ -745,7 +777,9 @@ export class GameScene extends Phaser.Scene {
     this.physics.add.overlap(this.wingman, this.enemies, (_wingman, enemy) => {
       if (this.challenging) return;
       if (!this.canBeHurt() || !enemy.active) return;
+      const orphans = enemy.captiveAttached === true;
       this.destroyEnemy(enemy, false);
+      if (orphans) this.loseCaptive(RescueOutcome.ORPHANED);
       this.onPlayerHit();
     });
 
@@ -765,13 +799,18 @@ export class GameScene extends Phaser.Scene {
       this.onPlayerHit();
     });
 
-    // A captive that has broken loose is flying at the player and can ram
-    // them, exactly as a diving enemy can. While it is still pinned under its
-    // captor it is only a target, so the guard is on the escape flight rather
-    // than on the sprite existing.
+    // A captive on a flight of its own -- the escort dive beside its captor,
+    // or the rogue descent -- can ram the player, exactly as a diving enemy
+    // can. While it is glued to its captor it is only a target, so the guard
+    // is on the flight rather than on the sprite existing. Ramming your own
+    // escorting captive destroys it too, which ends the capture.
     for (const ship of [this.player, this.wingman]) {
       this.physics.add.overlap(ship, this.captives, (_ship, captive) => {
         if (!captive.flight || !this.canBeHurt() || !captive.active) return;
+        if (!captive.rogue) {
+          if (this.captor) this.captor.captiveAttached = false;
+          this.captureState = transition(this.captureState, CaptureEvent.CAPTIVE_DESTROYED);
+        }
         this.clearCaptive();
         this.onPlayerHit();
       });
@@ -822,6 +861,15 @@ export class GameScene extends Phaser.Scene {
     this.clearBeam();
     this.clearTimers();
 
+    // The capture transients and the bonus-bee arming, fresh per stage: the
+    // clone-attack task re-arms every stage (`f_1A80` is re-enabled by stage
+    // init after its launch self-disable).
+    this.pull = null;
+    this.pullAccMs = 0;
+    this.beamRomX = null;
+    this.captiveSettled = false;
+    this.bonusBee = { spent: false, bee: null, timer: null, ticks: 0 };
+
     // STAGE n, then READY, then the wave -- the cabinet's own cadence, cut
     // inside the same 1800ms the single banner used to hold, so nothing about
     // when the formation actually arrives has moved.
@@ -856,8 +904,6 @@ export class GameScene extends Phaser.Scene {
     this.waveLauncher = createWaveLauncher(compileStageStream(this.stage, this.rank));
     this.waveEnabled = true;
     this.launcherAccMs = 0;
-
-    if (!this.challenging) this.scheduleCaptureAttempts();
   }
 
   /**
@@ -999,10 +1045,9 @@ export class GameScene extends Phaser.Scene {
    * Pump the per-type launch counters.
    *
    * Called every frame once the wave has assembled. The scheduler decides
-   * which types launch this frame against the row's active-bomber ceiling,
-   * and whether this frame's Zako launch is instead the transform pull --
-   * the arcade's schedule-driven trigger, in place of the 15-second timer an
-   * earlier revision ran.
+   * which types launch this frame against the row's active-bomber ceiling;
+   * a boss dispatch alternates escort sorties and solo capture missions,
+   * and the bonus-bee manager watches the thinning board behind it.
    */
   updateAttacks(delta) {
     if (!this.attackActive || this.challenging || this.stageResolving) return;
@@ -1028,7 +1073,7 @@ export class GameScene extends Phaser.Scene {
       (e) => e.enemyType === EnemyType.GOEI && canBeginDive(e),
     ).length;
 
-    const { state, launches, transformPull } = advanceScheduler(this.attack, delta, {
+    const { state, launches } = advanceScheduler(this.attack, delta, {
       activeBombers,
       // The scheduler's live inputs: the reloads and the bomb mask tighten
       // as the board thins and the stage drags, and continuous bombing arms
@@ -1038,98 +1083,158 @@ export class GameScene extends Phaser.Scene {
       playerFireActive: this.player.active,
       availableTypes,
       escortsAvailable,
-      // The cflag: a held fighter keeps the boss alternation from advancing.
-      captureActive: this.captureState === CaptureState.HELD,
-      transformStage: Boolean(this.transformType),
+      // The cflag: set for the whole capture mission -- descent, beam, pull
+      // and the held ship -- so no second beam can be chosen and the boss
+      // alternation holds where it is (gg1-2_fx.s:1011-1043).
+      captureActive: Boolean(this.captor) || this.captureState === CaptureState.HELD,
     });
     this.attack = state;
 
     launches.forEach((launch) => this.launchDive(launch));
-    if (transformPull) this.triggerTransform();
-  }
-
-  scheduleCaptureAttempts() {
-    this.captureTimer = this.time.addEvent({
-      delay: CAPTURE.attemptIntervalMs,
-      loop: true,
-      callback: () => this.attemptCapture(),
-    });
+    this.updateBonusBee();
   }
 
   /**
-   * Pull a Zako out of the grid, pulsate it, and replace it with a bonus trio.
-   *
-   * Only a Zako is eligible, which is what the arcade does and also what keeps
-   * the formation's shape readable: the Goei rows and the boss row stay intact
-   * while the bottom of the grid thins out.
+   * The endgame set-piece, `f_1A80` (gg1-2_fx.s:671-833): armed once per
+   * stage, only when the live count has thinned below the difficulty row's
+   * clone-attack gate -- 0 on stages 1-3 and challenge stages, 10 otherwise.
+   * A RESTING formation bee is chosen (the bee group in ID order, the moth
+   * group as fallback), flashed at 4 Hz for 64 frames, then repainted as the
+   * stage band's bonus ship and flown down the convoy path. A bee shot
+   * mid-flash bails; the arming is only spent at the launch itself.
    */
-  triggerTransform() {
-    if (this.isGameOver || this.challenging || !this.transformType) return;
-    if (!this.captureIsIdle()) return;
+  updateBonusBee() {
+    if (!this.transformType || this.bonusBee.spent || this.bonusBee.bee) return;
+    if (!bonusBeeGateOpen(this.attack.parms, this.enemies.countActive(true))) return;
 
-    const eligible = this.enemies
-      .getChildren()
-      .filter((enemy) => enemy.enemyType === EnemyType.ZAKO && canBeginDive(enemy));
-    if (eligible.length === 0) return;
+    const bee = this.pickBonusBee();
+    if (!bee) return;
 
-    const chosen = Phaser.Utils.Array.GetRandom(eligible);
-    chosen.transforming = true;
-
-    // The pulse is the player's warning. The tween is what decides when the
-    // swap happens, so a transform can never fire on a frame where the Zako
-    // has already been shot: `onComplete` re-checks that it is still alive.
-    this.tweens.add({
-      targets: chosen,
-      // The ship textures are drawn at scale 1, so the warning pulse is a
-      // straight 35% swell rather than a multiple of an authoring scale.
-      scale: 1.35,
-      duration: TRANSFORM.pulseDurationMs,
-      yoyo: true,
-      repeat: TRANSFORM.pulseRepeats,
-      onComplete: () => {
-        if (!chosen.active || this.isGameOver || this.stageResolving) return;
-        const origin = { x: chosen.x, y: chosen.y };
-        this.destroyEnemy(chosen, false);
-        this.spawnTransformSet(origin);
-      },
+    bee.transforming = true;
+    this.bonusBee.bee = bee;
+    this.bonusBee.ticks = 0;
+    this.bonusBee.timer = this.time.addEvent({
+      delay: BONUS_BEE_FLASH_PERIOD_FRAMES * FRAME_MS,
+      repeat: BONUS_BEE_FLASH_FRAMES / BONUS_BEE_FLASH_PERIOD_FRAMES - 1,
+      callback: () => this.onBonusBeeFlashTick(),
     });
   }
 
-  /**
-   * Three bonus ships abreast, each flying its own attack run from where the
-   * Zako was standing.
-   *
-   * They share one `set` object by reference; see `createTransformEnemy`. They
-   * are ordinary members of the enemy group, so every collider that already
-   * exists applies to them, and they leave off the bottom of the screen on
-   * their own if the player does not take them.
-   */
-  spawnTransformSet(origin) {
-    this.sfx.transformSet.play({ volume: 0.5 });
-    const set = { type: this.transformType, remaining: TRANSFORM_SET_SIZE };
+  /** First resting Zako in slot order; the Goei group is the ROM's fallback. */
+  pickBonusBee() {
+    const resting = this.enemies.getChildren().filter(canBeginDive);
+    const first = (type) =>
+      resting
+        .filter((enemy) => enemy.enemyType === type)
+        .sort((a, b) => (a.slot?.index ?? 0) - (b.slot?.index ?? 0))[0] ?? null;
+    return first(EnemyType.ZAKO) ?? first(EnemyType.GOEI);
+  }
 
-    for (let i = 0; i < TRANSFORM_SET_SIZE; i += 1) {
-      const start = {
-        x: origin.x + (i - (TRANSFORM_SET_SIZE - 1) / 2) * TRANSFORM.spacingX,
-        y: origin.y,
-      };
-      const enemy = createTransformEnemy(
-        this,
-        this.enemies,
-        this.transformType,
-        start,
-        set,
-        this.flapFrame,
-      );
-      // Armed like any attack dive: the mask the scheduler computed this
-      // frame from d_0909 and the live board.
-      enemy.bombMask = this.enemiesArmed() ? this.attack.bombFlags : 0;
-      enemy.bombCountdownMs = BOMB_ARM_FRAMES * FRAME_MS;
-      enemy.flight = createFlight(
-        divePath(start, this.player.x, SCREEN, { stageIndex: this.round }),
-        TRANSFORM.runDurationMs,
-      );
+  /** One 16-frame beat of the warning flash -- bit 4 of the ROM's counter. */
+  onBonusBeeFlashTick() {
+    const bee = this.bonusBee.bee;
+    if (!bee || !bee.active || this.stageResolving || this.isGameOver) {
+      this.cancelBonusBee();
+      return;
     }
+
+    this.bonusBee.ticks += 1;
+    if (this.bonusBee.ticks >= BONUS_BEE_FLASH_FRAMES / BONUS_BEE_FLASH_PERIOD_FRAMES) {
+      this.launchBonusBee(bee);
+      return;
+    }
+
+    if (bonusBeeFlashOn(this.bonusBee.ticks * BONUS_BEE_FLASH_PERIOD_FRAMES)) {
+      bee.setTintFill(0xffffff);
+    } else {
+      bee.clearTint();
+    }
+  }
+
+  /** The flash bailed -- bee killed first. The arm is NOT spent. */
+  cancelBonusBee() {
+    this.bonusBee.timer?.remove();
+    this.bonusBee.timer = null;
+    const bee = this.bonusBee.bee;
+    this.bonusBee.bee = null;
+    if (bee?.active) {
+      bee.clearTint();
+      bee.transforming = false;
+    }
+  }
+
+  /**
+   * The launch: repaint the bee IN PLACE as the stage band's bonus ship --
+   * the leader is the transformed formation bee itself -- and fly the
+   * per-colour convoy entry. The two clones split off mid-dive at the F2
+   * tokens; the tail takes an unkilled leader home to the grid, where it
+   * reverts to an ordinary bee. The task self-disables: one per stage.
+   */
+  launchBonusBee(bee) {
+    this.bonusBee.timer?.remove();
+    this.bonusBee.timer = null;
+    this.bonusBee.bee = null;
+    if (!bee.active || this.stageResolving || this.isGameOver) return;
+
+    this.bonusBee.spent = true;
+    bee.clearTint();
+    bee.transforming = false;
+    this.sfx.transformSet.play({ volume: 0.5 });
+
+    const type = this.transformType;
+    bee.setTexture(transformTextureKey(type));
+    applyShipArt(bee, type, { frame: this.flapFrame });
+    bee.artName = type;
+    bee.transformSet = { type, remaining: TRANSFORM_SET_SIZE };
+    bee.transformLeader = true;
+
+    // Launched through the shared dive machinery (`c_1083 -> j_108A`):
+    // armed at launch like any diver.
+    this.beginDiveSound();
+    bee.mode = EnemyMode.DIVING;
+    bee.bombMask = this.enemiesArmed() ? this.attack.bombFlags : 0;
+    bee.bombCountdownMs = BOMB_ARM_FRAMES * FRAME_MS;
+    bee.flight = createLiveFlight(
+      createConvoyLeaderFlightState(TRANSFORM_COLOURS[type], { x: bee.x, y: bee.y }, SCREEN, {
+        negateRotation: (bee.slot?.index ?? 0) % 2 === 1,
+      }),
+      SCREEN,
+    );
+  }
+
+  /**
+   * One F2 clone split (`case_097B`, gg1-5.s:1564-1633): a copy of the
+   * leader dropped into a transient slot (0x38-0x3E), running the embedded
+   * clone stream from where the leader is -- it F3-aims at the player, then
+   * despawns at its FF. It scores as a member of the leader's set; a clone
+   * that leaves unkilled simply never decrements it, which is why the set
+   * bonus needs all three.
+   */
+  spawnTransformClone(leader, cloneState) {
+    const clone = createTransformEnemy(
+      this,
+      this.enemies,
+      leader.transformSet.type,
+      { x: leader.x, y: leader.y },
+      leader.transformSet,
+      this.flapFrame,
+    );
+    clone.bombMask = this.enemiesArmed() ? this.attack.bombFlags : 0;
+    clone.bombCountdownMs = BOMB_ARM_FRAMES * FRAME_MS;
+    clone.flight = createLiveFlight(cloneState, SCREEN);
+  }
+
+  /**
+   * The leader flew home unkilled: it settles back into its slot and
+   * reverts to the ordinary formation bee it was. Its set can no longer be
+   * completed -- the survivor took the bonus with it.
+   */
+  revertTransformLeader(bee) {
+    bee.transformLeader = false;
+    bee.transformSet = undefined;
+    bee.setTexture(shipTextureKey(bee.enemyType));
+    applyShipArt(bee, bee.enemyType, { frame: this.flapFrame });
+    bee.artName = bee.enemyType;
   }
 
   /**
@@ -1150,44 +1255,58 @@ export class GameScene extends Phaser.Scene {
   /**
    * Launch the one attacker the scheduler emitted this frame.
    *
-   * The squad structure now lives in the scheduler: a boss escort sortie
+   * The squad structure lives in the scheduler: a boss escort sortie
    * arrives as an `escortLeader` launch followed by its `escortWingman`
    * launches on the next frames, the pool's one-per-frame stagger, so this
-   * launches exactly one enemy. The pick within the type is random; the
-   * arcade scans the formation in object-index order, which Task 5's slot
-   * work can refine.
+   * launches exactly one enemy. A boss launch takes the FIRST standby boss
+   * in index order (`l_1C1B`); a `capture` role flies the solo capture dive
+   * instead of an attack pass, and an escort leader that owns a captive
+   * brings it along -- the slave-slot rule, and the rescue chance.
    */
   launchDive(launch) {
     if (this.isGameOver || this.challenging || !this.captureIsIdle()) return;
 
-    const eligible = this.enemies.getChildren().filter(canBeginDive);
-    const ofType = eligible.filter((enemy) => enemy.enemyType === launch.type);
+    if (launch.type === EnemyType.BOSS) {
+      const boss = this.firstStandbyBoss();
+      if (!boss) return;
+
+      if (launch.role === 'capture') {
+        this.beginCaptureDive(boss);
+        return;
+      }
+
+      // Scoring reads the sortie's size off the leader: a boss that brought
+      // two wingmen is the 1600-point kill.
+      boss.escortCount = launch.wingmen ?? 0;
+      this.beginDive(boss);
+      if (boss === this.captor && boss.captiveAttached) this.launchCaptiveEscort();
+      return;
+    }
+
+    const ofType = this.enemies
+      .getChildren()
+      .filter((enemy) => canBeginDive(enemy) && enemy.enemyType === launch.type);
     if (ofType.length === 0) return;
 
-    // A boss holding a captured fighter has to actually leave formation for
-    // the rescue to be possible at all, so it is weighted to lead the dive
-    // rather than waiting for a one-in-four draw.
-    const captorLeads =
-      launch.type === EnemyType.BOSS &&
-      this.captor?.captiveAttached === true &&
-      canBeginDive(this.captor) &&
-      Math.random() < CAPTURE.captorDiveChance;
-
-    const leader = captorLeads ? this.captor : Phaser.Utils.Array.GetRandom(ofType);
-    // Scoring reads the sortie's size off the leader: a boss that brought
-    // two wingmen is the 1600-point kill.
-    leader.escortCount = launch.wingmen ?? 0;
+    const leader = Phaser.Utils.Array.GetRandom(ofType);
+    leader.escortCount = 0;
     this.beginDive(leader);
+  }
+
+  /** The ROM's boss pick: the first standby boss in index order (`l_1C1B`). */
+  firstStandbyBoss() {
+    return (
+      this.enemies
+        .getChildren()
+        .filter((enemy) => enemy.enemyType === EnemyType.BOSS && canBeginDive(enemy))
+        .sort((a, b) => (a.slot?.index ?? 0) - (b.slot?.index ?? 0))[0] ?? null
+    );
   }
 
   beginDive(enemy) {
     if (!canBeginDive(enemy)) return;
     this.beginDiveSound();
     enemy.mode = EnemyMode.DIVING;
-
-    // A captor takes the fighter it is holding down with it, and the fighter
-    // fights: rearm it for this run. See `updateCaptive` for the release.
-    if (enemy.captiveAttached && this.captive) this.captive.hasBombed = false;
 
     // Armed at launch, as `j_108A` arms every diver: a 30-frame countdown
     // and the drop bitmask the scheduler computed this frame from d_0909 --
@@ -1220,82 +1339,90 @@ export class GameScene extends Phaser.Scene {
     return enemiesBomb(this.stage, this.rank) && !this.noFire.triggered;
   }
 
-  attemptCapture() {
-    if (this.isGameOver || this.challenging || !this.captureIsIdle()) return;
-    if (!this.player.active) return;
-    // Two gates the arcade applies and a clock cannot: the stage has to allow
-    // captures at all, and there has to be enough formation left for hunting
-    // the captor down to be a plan the player can act on.
-    if (!captureAllowed(this.stage, this.enemies.countActive(true), this.rank)) return;
-
-    const bosses = this.enemies
-      .getChildren()
-      .filter((enemy) => enemy.enemyType === EnemyType.BOSS && canBeginDive(enemy));
-    if (bosses.length === 0) return;
-
-    const boss = Phaser.Utils.Array.GetRandom(bosses);
-    this.captureState = transition(this.captureState, CaptureEvent.DEPLOY_BEAM);
-    if (this.captureState !== CaptureState.BEAM_OPENING) return;
-
+  /**
+   * The solo capture mission (`db_0454`, gg1-5.s:359-366): the boss departs
+   * alone on the boss table's capture entry. The F4 token aims the beam
+   * column at the player's lane ONCE on the way down, the FC dive brings it
+   * to raw Y 0x48, and the `00 FC FF` stall -- a ~255-frame in-place spin --
+   * is the hover the whole beam sequence plays over. `this.captor` doubles
+   * as the cflag: while it is set no new beam can be chosen and the boss
+   * alternation holds where it is.
+   */
+  beginCaptureDive(boss) {
+    this.beginDiveSound();
     boss.mode = EnemyMode.DIVING;
+    boss.escortCount = 0;
     this.captor = boss;
+    this.beamRomX = null;
     this.sfx.bossEntrance.play({ volume: 0.5 });
 
-    // Down into the player's half of the field and across toward the player's
-    // column, then open the beam. The descent is the tell: it is a markedly
-    // different move from the one-loop dive every other attacker makes, and it
-    // is the player's warning to get out of the way.
-    //
-    // The sideways travel is capped, so the boss aims once on the way down
-    // rather than tracking. A player who reads the descent and moves can still
-    // slip out from under it.
-    this.tweens.add({
-      targets: boss,
-      x: this.aimedBeamX(boss),
-      y: CAPTURE.descendToY,
-      duration: CAPTURE.descendDurationMs,
-      ease: 'Sine.easeInOut',
-      onComplete: () => this.openBeam(boss),
-    });
+    boss.bombMask = this.enemiesArmed() ? this.attack.bombFlags : 0;
+    boss.bombCountdownMs = BOMB_ARM_FRAMES * FRAME_MS;
+    boss.flight = createLiveFlight(
+      createDiveFlightState(EnemyType.BOSS, { x: boss.x, y: boss.y }, SCREEN, {
+        role: 'capture',
+        negateRotation: (boss.slot?.index ?? 0) % 2 === 1,
+      }),
+      SCREEN,
+    );
   }
 
   /**
-   * Where a descending boss lines its beam up: the player's column, as far as
-   * it can reach, and never so far out that the beam hangs off the screen.
+   * The capture dive's hover. Once the F4 aim has been taken and the entry's
+   * stall segment is running (vx = vy = 0), `f_21CB` (gg1-3.s:392-446) first
+   * spins the boss to face straight DOWN -- +/-0x0C per frame until the
+   * heading is within 0x10 of 768 -- and only then opens the beam.
    */
-  aimedBeamX(boss) {
-    const reach = Phaser.Math.Clamp(
-      this.player.x - boss.x,
-      -CAPTURE.aimTravelPx,
-      CAPTURE.aimTravelPx,
-    );
-    const half = CAPTURE.beamWidth / 2;
-    return Phaser.Math.Clamp(boss.x + reach, half, SCREEN.width - half);
-  }
+  updateCaptureHover(boss) {
+    const state = boss.flight?.state;
+    if (!state || state.done || state.vx !== 0 || state.vy !== 0) return;
 
-  openBeam(boss) {
-    if (!boss.active || this.isGameOver) {
-      this.captureState = transition(this.captureState, CaptureEvent.RESET);
+    const delta = ((state.angle - 0x300 + 512) & 0x3ff) - 512;
+    if (Math.abs(delta) >= 0x10) {
+      state.rotRate = delta > 0 ? -PULL_SPIN_STEP : PULL_SPIN_STEP;
       return;
     }
 
+    state.rotRate = 0;
+    state.angle = 0x300;
+    this.openBeam(boss);
+  }
+
+  /** Where the aimed beam column sits on screen. */
+  beamScreenX() {
+    return (this.beamRomX ?? (this.captor ? this.captor.x / ROM_TO_SCREEN : 0)) * ROM_TO_SCREEN;
+  }
+
+  openBeam(boss) {
+    if (!boss.active || this.isGameOver) return;
+    this.captureState = transition(this.captureState, CaptureEvent.DEPLOY_BEAM);
+    if (this.captureState !== CaptureState.BEAM_OPENING) return;
+
     this.sfx.beamOpen.play({ volume: 0.5 });
+
+    // The stage's beam clock: 11 strips at the difficulty row's
+    // frames-per-strip for grow and shrink, the fixed 64-frame grab window
+    // between them.
+    this.beamClock = beamTimings(this.difficulty.beamFramesPerStrip);
 
     // A ripped beam, when a local checkout has one: full-beam frames cycled
     // like the strips would be, revealed by a crop while it unfurls. Without
     // one the fan is drawn strip by strip; either way `this.beam` is the
-    // object whose x/y the pull and the demo pilot read.
+    // object whose x the grab test and the demo pilot read. The cone is
+    // anchored on the F4-aimed column, NOT the boss's drifted X.
+    const x = this.beamScreenX();
+    const y = boss.y + CAPTURE.beamOffsetY;
     const local = localArtFrames('beam');
     if (local && this.textures.exists(local[0])) {
       this.beam = this.add
-        .image(boss.x, boss.y + CAPTURE.beamOffsetY, local[0])
+        .image(x, y, local[0])
         .setOrigin(0.5, 0)
-        .setDisplaySize(CAPTURE.beamWidth * 1.4, CAPTURE.beamLength)
+        .setDisplaySize(CAPTURE.beamWidth, CAPTURE.beamLength)
         .setAlpha(0.85)
         .setDepth(5);
       this.beamLocalFrames = local;
     } else {
-      this.beam = this.add.graphics({ x: boss.x, y: boss.y + CAPTURE.beamOffsetY });
+      this.beam = this.add.graphics({ x, y });
       this.beam.setAlpha(0.85).setDepth(5);
       this.beamLocalFrames = null;
     }
@@ -1304,26 +1431,18 @@ export class GameScene extends Phaser.Scene {
     this.beamPhaseElapsed = 0;
     this.beamTotalElapsed = 0;
     this.drawBeam();
-
-    this.time.delayedCall(CAPTURE.beamOpenMs, () => {
-      if (this.captureState === CaptureState.BEAM_OPENING) {
-        this.captureState = CaptureState.BEAM_ACTIVE;
-      }
-      if (this.beamPhase === 'opening') {
-        this.beamPhase = 'active';
-        this.beamPhaseElapsed = 0;
-      }
-    });
-
-    this.time.delayedCall(CAPTURE.beamOpenMs + CAPTURE.beamHoldMs, () => this.closeBeam());
   }
 
+  /**
+   * The grab window closed on nothing. `l_22E3` (gg1-3.s:607-612): the furl
+   * begins, and the boss's ~255-frame stall is force-expired so it flies its
+   * retreat tail -- the climb, the F8/F9 top re-entry, the FA gate and the
+   * FB glide home -- immediately rather than spinning out the leftover.
+   */
   closeBeam() {
     if (!isBeamDangerous(this.captureState)) return;
     this.captureState = transition(this.captureState, CaptureEvent.BEAM_TIMEOUT);
 
-    // The trap is sprung the moment the state machine says so; the furl that
-    // follows is only the picture of it closing. The boss does not wait for it.
     if (this.beam) {
       this.beamPhase = 'retracting';
       this.beamPhaseElapsed = 0;
@@ -1331,7 +1450,8 @@ export class GameScene extends Phaser.Scene {
 
     const boss = this.captor;
     this.captor = null;
-    this.sendCaptorHome(boss);
+    this.beamRomX = null;
+    if (boss?.active && boss.flight?.state) boss.flight.state.segTimer = 1;
   }
 
   clearBeam() {
@@ -1349,11 +1469,11 @@ export class GameScene extends Phaser.Scene {
    */
   drawBeam() {
     const opts = {
-      strips: CAPTURE.beamStrips,
-      openMs: CAPTURE.beamOpenMs,
+      strips: BEAM_STRIPS,
+      openMs: this.beamClock.openMs,
       cycleMs: CAPTURE.beamCycleMs,
-      retractMs: CAPTURE.beamRetractMs,
-      width: CAPTURE.beamWidth * 1.4,
+      retractMs: this.beamClock.retractMs,
+      width: CAPTURE.beamWidth,
       length: CAPTURE.beamLength,
     };
     const strips = beamStripsAt(this.beamPhase, this.beamPhaseElapsed, opts);
@@ -1365,9 +1485,9 @@ export class GameScene extends Phaser.Scene {
         ];
       if (this.textures.exists(frame)) this.beam.setTexture(frame);
       const source = this.beam.texture.getSourceImage();
-      const revealed = strips.length / CAPTURE.beamStrips;
+      const revealed = strips.length / BEAM_STRIPS;
       this.beam.setCrop(0, 0, source.width, source.height * revealed);
-      this.beam.setDisplaySize(CAPTURE.beamWidth * 1.4, CAPTURE.beamLength);
+      this.beam.setDisplaySize(CAPTURE.beamWidth, CAPTURE.beamLength);
       return;
     }
 
@@ -1378,60 +1498,63 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  /**
-   * Fly a boss back to its slot from wherever it stopped.
-   *
-   * A boss that has deployed a beam is halted low on the field, so it climbs
-   * back from there. Handing it `returnPath`, the way a finished diver is
-   * handled, would snap it off the top of the screen first, because that path
-   * starts above the ceiling.
-   */
-  sendCaptorHome(boss) {
-    if (!boss || !boss.active) return;
-
-    const target = this.slotPosition(boss.slot);
-    boss.mode = EnemyMode.RETURNING;
-
-    this.tweens.add({
-      targets: boss,
-      x: target.x,
-      y: target.y,
-      duration: DIVE.returnDurationMs,
-      ease: 'Sine.easeInOut',
-      onComplete: () => settleIntoFormation(boss, this.slotPosition(boss.slot)),
-    });
-  }
-
   capturePlayer() {
     this.captureState = transition(this.captureState, CaptureEvent.PLAYER_CAUGHT);
     if (this.captureState !== CaptureState.CAPTURING) return;
 
     this.sfx.beamCapture.play({ volume: 0.6 });
     this.player.disableBody(true, false);
-    this.clearBeam();
 
     // A dual fighter caught in a beam loses its second ship rather than
     // carrying it up to the boss.
     this.clearDualFighter();
 
-    const boss = this.captor;
-    this.tweens.add({
-      targets: this.player,
-      x: boss ? boss.x : this.player.x,
-      y: boss ? boss.y + CAPTURE.captiveOffsetY : 0,
-      duration: CAPTURE.captureRiseMs,
-      // The cabinet's fighter has one sprite frame and sixteen orientations,
-      // so the ride up the beam is a stepped spin, not a smooth turn: the
-      // ship clicks through the same stops a diving Goei does.
-      onUpdate: (tween) =>
-        this.player.setRotation(
-          spinAngleAt(tween.progress * CAPTURE.captureRiseMs, CAPTURE.captureRiseMs),
-        ),
-      onComplete: () => this.onCaptureComplete(),
+    // The beam flips to retract the moment the trap springs, and the pull
+    // plays over the furl. The captor's stall is pinned so it cannot expire
+    // out from under the ride up.
+    if (this.beam) {
+      this.beamPhase = 'retracting';
+      this.beamPhaseElapsed = 0;
+    }
+    if (this.captor?.flight?.state) this.captor.flight.state.segTimer = 0xff;
+
+    this.pull = createPull({
+      x: this.player.x / ROM_TO_SCREEN,
+      y: this.player.y / ROM_TO_SCREEN,
     });
+    this.pullAccMs = 0;
+  }
+
+  /**
+   * The pull-ship ride (`f_20F2`): ROM-denominated frames of the tumble --
+   * +/-1 px toward the boss's column with the wobble, 1 px up, the 0x0C
+   * spin step -- until the connect row latches and the carry-home begins.
+   * The starfield reverses for exactly this span: the CAPTURING state.
+   */
+  updatePull(delta) {
+    if (!this.pull || !this.captor || !this.captor.active) return;
+
+    this.pullAccMs += Math.max(delta, 0);
+    let frames = Math.floor(this.pullAccMs / FRAME_MS + 1e-9);
+    this.pullAccMs -= frames * FRAME_MS;
+
+    const bossX = this.captor.x / ROM_TO_SCREEN;
+    while (frames > 0 && !this.pull.connected) {
+      this.pull = advancePull(this.pull, bossX);
+      frames -= 1;
+    }
+
+    this.player.setPosition(this.pull.x * ROM_TO_SCREEN, this.pull.y * ROM_TO_SCREEN);
+    // The cabinet's fighter has sixteen orientations, so the tumble clicks
+    // through the same stops a diving Goei does.
+    this.player.setRotation(quantizeHeading(angleToRadians(this.pull.angle)));
+
+    if (this.pull.connected) this.onCaptureComplete();
   }
 
   onCaptureComplete() {
+    this.pull = null;
+    this.beamRomX = null;
     this.player.setVisible(false);
     this.player.setAngle(0);
     this.captureState = transition(this.captureState, CaptureEvent.CAPTURE_COMPLETE);
@@ -1446,77 +1569,129 @@ export class GameScene extends Phaser.Scene {
       applyShipArt(this.captive, 'captive');
       this.captive.body.setAllowGravity(false);
       boss.captiveAttached = true;
+      this.captiveSettled = false;
 
-      // The captor rejoins the formation with its prize in tow, so the player
-      // can hunt it down. `this.captor` stays set: the held ship is drawn
-      // against it every frame from here until one of them is destroyed.
-      this.sendCaptorHome(boss);
+      // The carry-home (`db_flv_cboss`): the boss flies back to its slot
+      // with the prize glued 16 ROM px underneath, the FB glide riding the
+      // swaying grid. RETURNING, not DIVING: a kill during the carry
+      // ORPHANS the slave rather than rescuing it -- the L1 branch.
+      boss.mode = EnemyMode.RETURNING;
+      boss.flight = createLiveFlight(
+        createCarryHomeFlightState({ x: boss.x, y: boss.y }, SCREEN),
+        SCREEN,
+      );
     }
 
     this.loseLife();
   }
 
   /**
-   * Fly the held fighter: pinned beneath its captor, or, once it has broken
-   * loose, along its own last attack run.
-   *
-   * A captured Fighter is not a trophy hanging in the grid. It has joined the
-   * enemy side, and on the one run where its captor brings it down within
-   * reach it fires on the player alongside it. The release point is the same
-   * fraction of the run the captor's own bomb uses, so the two shots arrive
-   * together and the captor's dive reads as the double threat it is.
+   * The boss landed with its prize: the slave rises over the ROM's 36-frame
+   * counter to settle ABOVE the boss, where it hangs as a red hostage.
+   */
+  settleCaptive() {
+    if (!this.captive || !this.captor) return;
+    this.captiveSettled = 'rising';
+    this.tweens.add({
+      targets: this.captive,
+      y: this.captor.y - CAPTURE.captiveOffsetY,
+      duration: SETTLE_FRAMES * FRAME_MS,
+      onComplete: () => {
+        if (this.captive) this.captiveSettled = true;
+      },
+    });
+  }
+
+  /**
+   * Fly the held fighter: glued to its captor -- below during the carry,
+   * above once settled -- or on a flight of its own: the escort dive beside
+   * its captor, or the rogue descent after a formation kill.
    */
   updateCaptive(delta) {
     const captive = this.captive;
     if (!captive) return;
 
     if (captive.flight) {
-      this.advanceCaptiveEscape(captive, delta);
+      this.advanceCaptiveFlight(captive, delta);
       return;
     }
 
     if (!this.captor || !this.captor.active) return;
-    captive.setPosition(this.captor.x, this.captor.y + CAPTURE.captiveOffsetY);
 
-    // The captor's dives run live on the path machine with no fixed
-    // duration, so "far enough into the run" is read off its descent for a
-    // live flight and off track progress for a compiled one.
-    const committed = (flight) =>
-      isLiveFlight(flight)
-        ? this.captor.y >= SCREEN.height * 0.35
-        : flightProgress(flight) >= DIVE.bombAtProgress;
-
-    const readyToBomb =
-      captiveCanBomb(this.captureState, isDiving(this.captor)) &&
-      !captive.hasBombed &&
-      this.captor.flight &&
-      committed(this.captor.flight);
-
-    if (readyToBomb) {
-      captive.hasBombed = true;
-      this.fireEnemyBullet(captive);
+    if (this.captiveSettled === 'rising') {
+      // The settle tween owns Y; the glue keeps X on the boss.
+      captive.x = this.captor.x;
+      return;
     }
+
+    const offset = this.captiveSettled === true ? -CAPTURE.captiveOffsetY : CAPTURE.captiveOffsetY;
+    captive.setPosition(this.captor.x, this.captor.y + offset);
   }
 
   /**
-   * The swoop a captive makes after its captor dies in formation.
-   *
-   * It gets one shot on the way past, which is what makes taking the wrong
-   * shot at a captor cost something rather than merely forfeiting the rescue,
-   * and then it leaves through the bottom of the screen for good.
+   * The slave-slot rule (`l_1CE3`, gg1-2_fx.s:1221-1248): when its captor
+   * leads an escort sortie, a settled slave is queued with the SAME flight
+   * vector -- `db_flv_0411`, the escort path. The captive dives as an extra
+   * escort that happens to be your red ship, and it bombs under the same
+   * launch-armed rules as any diver (`j_108A`) -- this is the rescue window.
    */
-  advanceCaptiveEscape(captive, delta) {
-    captive.flight = advanceFlight(captive.flight, delta);
-    const { x, y, angle } = flightTransform(captive.flight);
+  launchCaptiveEscort() {
+    const captive = this.captive;
+    if (!captive || captive.flight || this.captiveSettled !== true) return;
+
+    captive.escorting = true;
+    captive.mode = EnemyMode.DIVING;
+    captive.bombMask = this.enemiesArmed() ? this.attack.bombFlags : 0;
+    captive.bombCountdownMs = BOMB_ARM_FRAMES * FRAME_MS;
+    captive.flight = createLiveFlight(
+      createDiveFlightState(EnemyType.BOSS, { x: captive.x, y: captive.y }, SCREEN, {
+        negateRotation: (this.captor?.slot?.index ?? 0) % 2 === 1,
+      }),
+      SCREEN,
+    );
+  }
+
+  /** One frame of a captive's own flight: escort dive or rogue descent. */
+  advanceCaptiveFlight(captive, delta) {
+    const post = this.captor?.slot ? this.slotPosition(this.captor.slot) : null;
+    const { flight, events } = advanceLiveFlight(captive.flight, delta, {
+      playerX: this.player.x,
+      // The FB glide brings the escorting slave back to its hostage post
+      // above the boss, riding the swaying grid.
+      homeTarget: post ? { x: post.x, y: post.y - CAPTURE.captiveOffsetY } : undefined,
+      stage8Switch: this.difficulty.stage8PathSwitch,
+      stage12Switch: this.difficulty.stage12BombingSwitch,
+      continuousBombing: this.attack?.continuousBombing ?? false,
+    });
+    captive.flight = flight;
+    const { x, y, angle } = liveFlightTransform(flight);
     captive.setPosition(x, y);
     captive.setRotation(quantizeHeading(angle));
 
-    if (!captive.hasBombed && flightProgress(captive.flight) >= DIVE.bombAtProgress) {
-      captive.hasBombed = true;
-      this.fireEnemyBullet(captive);
+    for (const event of events) {
+      if (event.type === 'armBombs' && this.enemiesArmed()) {
+        captive.bombMask = this.attack.bombFlags;
+        captive.bombCountdownMs = BOMB_ARM_FRAMES * FRAME_MS;
+      }
     }
 
-    if (isFlightComplete(captive.flight)) this.clearCaptive();
+    // The slave bombs like any launch-armed diver: the standard machinery,
+    // not a bespoke one-shot.
+    this.updateEnemyBombs(captive, delta);
+
+    if (!isLiveFlightDone(captive.flight)) return;
+
+    if (liveFlightHomed(captive.flight)) {
+      // The escort pass ended on the FB glide: back to the hostage post.
+      captive.flight = null;
+      captive.escorting = false;
+      captive.mode = null;
+      captive.setRotation(0);
+      return;
+    }
+
+    // FF: the rogue fighter left the field for good.
+    this.clearCaptive();
   }
 
   clearCaptive() {
@@ -1524,6 +1699,7 @@ export class GameScene extends Phaser.Scene {
       this.captive.destroy();
       this.captive = null;
     }
+    this.captiveSettled = false;
   }
 
   clearDualFighter() {
@@ -1541,6 +1717,12 @@ export class GameScene extends Phaser.Scene {
       this.captureState = transition(this.captureState, CaptureEvent.DOCK_COMPLETE);
       return;
     }
+
+    // The rescue interrupts the slave's own escort dive mid-flight: `f_2000`
+    // takes over from wherever it was for the spin-down to the dock.
+    this.captive.flight = null;
+    this.captive.escorting = false;
+    this.captive.mode = null;
 
     this.tweens.add({
       targets: this.captive,
@@ -1643,22 +1825,54 @@ export class GameScene extends Phaser.Scene {
       this.spawnScorePopup(enemy.x, enemy.y, points);
     }
 
-    // Galaga's rescue rule: the ship only comes back if its captor is shot
-    // down on a dive. Read the mode before the sprite is destroyed, and let
-    // the pure rule decide, so "diving or not" is the only thing the scene
-    // contributes.
+    // The capture's mission-end table, decided before the sprite goes.
+    //
+    // A captor shot with its beam out -- or mid-pull, the L3 branch -- aborts
+    // the mission and RELEASES a fighter already on the ride up. A captor
+    // that owned a settled slave resolves through the pure rule: rescued
+    // only when it died FLYING with the slave diving beside it (necessarily
+    // on its second, blue hit -- a boss dies on no other); orphaned when it
+    // died flying with the slave glued (the carry-home); rogue when it died
+    // at home in the formation.
+    const wasCaptor = enemy === this.captor;
+    const midBeamOrPull =
+      wasCaptor &&
+      (isBeamDangerous(this.captureState) || this.captureState === CaptureState.CAPTURING);
+
     const outcome =
       enemy.captiveAttached === true
-        ? resolveCaptorDestroyed(this.captureState, isDiving(enemy))
+        ? resolveCaptorDestroyed(this.captureState, {
+            captorFlying: enemy.mode !== EnemyMode.IN_FORMATION,
+            captiveEscorting: this.captive?.escorting === true && Boolean(this.captive?.flight),
+          })
         : RescueOutcome.NONE;
 
     this.destroyEnemy(enemy, true);
 
-    if (outcome === RescueOutcome.RESCUED) {
+    if (midBeamOrPull) {
+      this.releaseFromBeam();
+    } else if (outcome === RescueOutcome.RESCUED) {
       this.addScore(CAPTURED_FIGHTER_POINTS);
       this.rescueCaptive();
-    } else if (outcome === RescueOutcome.CAPTIVE_LOST) {
-      this.loseCaptive();
+    } else if (outcome === RescueOutcome.ORPHANED || outcome === RescueOutcome.ROGUE) {
+      this.loseCaptive(outcome);
+    }
+  }
+
+  /**
+   * The captor was shot out from under its own beam, or mid-pull (`l_2327`,
+   * gg1-3.s:639-649): the mission aborts, and a fighter already in the pull
+   * is RELEASED -- control comes back where it hangs and NO life is lost.
+   */
+  releaseFromBeam() {
+    const midPull = this.captureState === CaptureState.CAPTURING;
+    this.captureState = transition(this.captureState, CaptureEvent.CAPTOR_DESTROYED);
+    this.pull = null;
+
+    if (midPull) {
+      this.player.enableBody(true, this.player.x, this.player.y, true, true);
+      this.player.setAngle(0);
+      this.makeInvulnerable(1000);
     }
   }
 
@@ -1675,11 +1889,12 @@ export class GameScene extends Phaser.Scene {
 
     this.stats = recordHit(this.stats);
 
-    // The 1,000 is for shooting your *own* fighter -- a ship you could still
-    // have won back. Once the captive has broken loose and is diving at the
-    // player the capture is already resolved and the ship is gone either way,
-    // so shooting it down is just self-defence and pays nothing.
-    if (!this.captive.flight) {
+    // The 1,000 is for shooting your OWN fighter -- pinned to its captor or
+    // diving beside it as an escort, a ship you could still have won back
+    // (the L2 branch, gg1-5.s:1305-1311). A rogue already lost when its
+    // captor died in formation is gone either way, so shooting it down is
+    // just self-defence and pays nothing.
+    if (!this.captive.rogue) {
       this.addScore(CAPTURED_FIGHTER_POINTS);
       this.spawnScorePopup(this.captive.x, this.captive.y, CAPTURED_FIGHTER_POINTS);
       if (this.captor) this.captor.captiveAttached = false;
@@ -1693,26 +1908,38 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * The captor died in formation, so the ship it was holding turns on the
-   * player.
+   * The captor died still owning its slave, without the rescue conditions.
    *
-   * The arcade does not simply delete it: the freed captive "will swoop down
-   * on you... it will disappear off the bottom of the screen and go away". So
-   * it flies one last attack run, with a shot in it, and only then is gone.
-   * That run is the cost of taking the wrong shot at a captor; an earlier
-   * revision tweened it straight down off the screen, which made shooting a
-   * captor in formation free apart from the forfeited rescue.
+   * The O branch: killed at home in the formation, the freed slave goes
+   * ROGUE -- it launches out on `db_fltv_rogefgter` (the boss table's plain
+   * descent at offset 56), armed like any launched diver, and despawns off
+   * the bottom for good; it never homes (gg1-5.s:1442-1456, 2516). The L1
+   * branch: killed flying with the slave glued -- mid-carry -- the slave is
+   * simply orphaned and lost with it.
    */
-  loseCaptive() {
+  loseCaptive(outcome) {
     this.captureState = transition(this.captureState, CaptureEvent.CAPTIVE_DESTROYED);
     if (!this.captive) return;
 
     this.showBanner('FIGHTER LOST', 1400);
-    this.captive.hasBombed = false;
-    this.captive.flight = createFlight(
-      captiveEscapePath({ x: this.captive.x, y: this.captive.y }, this.player.x, SCREEN),
-      CAPTURE.captiveEscapeMs,
-    );
+
+    if (outcome === RescueOutcome.ROGUE) {
+      const captive = this.captive;
+      captive.rogue = true;
+      captive.escorting = false;
+      captive.mode = EnemyMode.DIVING;
+      captive.bombMask = this.enemiesArmed() ? this.attack.bombFlags : 0;
+      captive.bombCountdownMs = BOMB_ARM_FRAMES * FRAME_MS;
+      captive.flight = createLiveFlight(
+        createDiveFlightState(EnemyType.BOSS, { x: captive.x, y: captive.y }, SCREEN, {
+          role: 'rogue',
+        }),
+        SCREEN,
+      );
+      return;
+    }
+
+    this.clearCaptive();
   }
 
   /**
@@ -1773,7 +2000,13 @@ export class GameScene extends Phaser.Scene {
 
     if (enemy === this.captor) {
       this.captor = null;
-      this.clearBeam();
+      this.beamRomX = null;
+      // The beam furls where it was left rather than blinking out; with the
+      // captor gone no state can catch through it.
+      if (this.beam && this.beamPhase !== 'retracting') {
+        this.beamPhase = 'retracting';
+        this.beamPhaseElapsed = 0;
+      }
     }
 
     enemy.destroy();
@@ -1933,6 +2166,7 @@ export class GameScene extends Phaser.Scene {
     this.updateAttacks(delta);
     this.updateDiveSound();
     this.updatePlayer();
+    this.updatePull(delta);
     this.updateCaptive(delta);
     this.updateBeam(delta);
     this.cullProjectiles();
@@ -2084,11 +2318,27 @@ export class GameScene extends Phaser.Scene {
     for (const event of events) {
       // F6 free flight re-arms the bomb string on every pass, exactly as
       // j_108A does at launch: the countdown and this frame's d_0909 mask.
-      // The capture-aim and clone-split events are Task 5's machines.
       if (event.type === 'armBombs' && this.enemiesArmed()) {
         enemy.bombMask = this.attack.bombFlags;
         enemy.bombCountdownMs = BOMB_ARM_FRAMES * FRAME_MS;
       }
+      // F4 (case_0A53): the capture dive committed its beam column -- the
+      // player's sprite X clamped to the lane, held as the aim the beam is
+      // anchored on for the rest of the mission.
+      if (event.type === 'captureAim' && enemy === this.captor) {
+        this.beamRomX = event.targetSpriteX - 10;
+      }
+      // F2 (case_097B): the convoy leader split a clone into a transient
+      // slot from wherever it is.
+      if (event.type === 'cloneSplit' && enemy.transformLeader) {
+        this.spawnTransformClone(enemy, event.clone);
+      }
+    }
+
+    // The capture dive's hover: once the aim is taken and the stall segment
+    // is running, spin to face down and open the beam over it.
+    if (enemy === this.captor && this.beamRomX !== null && !this.beam) {
+      this.updateCaptureHover(enemy);
     }
 
     this.updateEnemyBombs(enemy, delta);
@@ -2099,6 +2349,13 @@ export class GameScene extends Phaser.Scene {
       // The FB glide snapped onto the slot -- entries and finished dives
       // both end here; the dive tables carry their own top re-entry.
       settleIntoFormation(enemy, this.slotPosition(enemy.slot));
+      // A captor landing with its prize starts the slave's 36-frame rise to
+      // its post above the boss; a surviving convoy leader reverts to the
+      // ordinary bee it was.
+      if (enemy === this.captor && enemy.captiveAttached && this.captiveSettled === false) {
+        this.settleCaptive();
+      }
+      if (enemy.transformLeader) this.revertTransformLeader(enemy);
     } else if (enemy.slot) {
       // FF with no home: an authored caravan row still selecting one of the
       // token-free fly-through blocks (until Task 4's stream machine).
@@ -2288,38 +2545,44 @@ export class GameScene extends Phaser.Scene {
     bullet.setVelocityY(-PLAYER.bulletSpeed);
   }
 
+  /**
+   * The beam clock, the ROM's three modes: grow (11 strips at the stage's
+   * frames-per-strip), the fixed 64-frame grab window, shrink. The cone is
+   * anchored on the aimed column and never follows the boss. The grab test
+   * runs every frame of the window and never outside it -- a pure +/-27
+   * ROM px positional check, with NO drag: the player keeps full control
+   * until the instant they are caught.
+   */
   updateBeam(delta) {
     if (!this.beam) return;
 
     this.beamPhaseElapsed += delta;
     this.beamTotalElapsed += delta;
-
-    if (this.captor && this.captor.active) {
-      this.beam.setPosition(this.captor.x, this.captor.y + CAPTURE.beamOffsetY);
-    }
     this.drawBeam();
 
-    // The furl plays out where the beam was left and then the object goes.
-    if (this.beamPhase === 'retracting') {
-      if (this.beamPhaseElapsed >= CAPTURE.beamRetractMs) this.clearBeam();
+    if (this.beamPhase === 'opening' && this.beamPhaseElapsed >= this.beamClock.openMs) {
+      this.beamPhase = 'active';
+      this.beamPhaseElapsed = 0;
+      this.captureState = transition(this.captureState, CaptureEvent.BEAM_FULL);
+    }
+
+    if (this.beamPhase === 'active') {
+      if (
+        this.captureState === CaptureState.BEAM_ACTIVE &&
+        this.canBeHurt() &&
+        beamCatches('active', this.beamRomX, this.player.x / ROM_TO_SCREEN)
+      ) {
+        this.capturePlayer();
+        return;
+      }
+      if (this.beamPhaseElapsed >= this.beamClock.holdMs) this.closeBeam();
       return;
     }
 
-    if (!this.captor || !this.captor.active) return;
-    if (!isBeamDangerous(this.captureState) || !this.canBeHurt()) return;
-
-    // Inside the beam column: drag the player toward its centre, and capture
-    // once they have been pulled far enough up it.
-    const withinX = Math.abs(this.player.x - this.beam.x) < CAPTURE.beamWidth / 2;
-    const withinY =
-      this.player.y > this.beam.y && this.player.y < this.beam.y + CAPTURE.beamLength;
-    if (!withinX || !withinY) return;
-
-    const pull = this.beam.x - this.player.x;
-    this.player.x += Math.sign(pull) * Math.min(Math.abs(pull), 2);
-    this.player.y -= CAPTURE.pullStrength * (delta / 1000);
-
-    if (this.player.y < this.beam.y + CAPTURE.captureDepth) this.capturePlayer();
+    // The furl plays out where the beam was left and then the object goes.
+    if (this.beamPhase === 'retracting' && this.beamPhaseElapsed >= this.beamClock.retractMs) {
+      this.clearBeam();
+    }
   }
 
   cullProjectiles() {
@@ -2491,8 +2754,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   clearTimers() {
-    this.captureTimer?.remove();
-    this.captureTimer = null;
+    // The bonus-bee flash rides a clock event; anything mid-flash unwinds.
+    this.bonusBee?.timer?.remove();
+    if (this.bonusBee) {
+      this.bonusBee.timer = null;
+      this.bonusBee.bee = null;
+    }
     // The wave launcher and the attack scheduler are not timers, but they
     // stop with them.
     this.waveEnabled = false;

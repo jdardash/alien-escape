@@ -1,13 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import { BEAM_COLORS, beamStripsAt } from '../src/systems/beam.js';
+import { BEAM_STRIPS, beamTimings } from '../src/systems/capture.js';
 import { CAPTURE } from '../src/config.js';
 
+// The options exactly as the scene wires them: the ROM's 11 strips and the
+// stage-1 clock (12 frames a strip) from `beamTimings`, the presentation
+// numbers from config.
+const clock = beamTimings(12);
 const opts = {
-  strips: CAPTURE.beamStrips,
-  openMs: CAPTURE.beamOpenMs,
+  strips: BEAM_STRIPS,
+  openMs: clock.openMs,
   cycleMs: CAPTURE.beamCycleMs,
-  retractMs: CAPTURE.beamRetractMs,
-  width: CAPTURE.beamWidth * 1.4,
+  retractMs: clock.retractMs,
+  width: CAPTURE.beamWidth,
   length: CAPTURE.beamLength,
 };
 

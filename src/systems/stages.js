@@ -104,22 +104,12 @@ export function enemiesBomb(stage, _rank = DifficultyRank.A) {
   return !isChallengingStage(stage);
 }
 
-/**
- * Whether a Boss Galaga may attempt a tractor beam right now.
- *
- * The arcade does not stage-gate captures: every other boss launch is a solo
- * capture dive from stage 1 onward (gg1-2_fx.s:1013-1043), one at a time.
- * The pass-5 capture flag and its minimum-formation threshold were both
- * invented and are gone. What is left is structural: a challenge stage has
- * no formation to launch a captor from, and a capture needs at least one
- * enemy alive to be the captor. The scene still runs its own timer to decide
- * *when* to try until Task 5 moves the attempt onto the boss launch
- * alternation the scheduler now exposes.
- */
-export function captureAllowed(stage, enemiesRemaining, _rank = DifficultyRank.A) {
-  if (isChallengingStage(stage)) return false;
-  return enemiesRemaining > 0;
-}
+// There is no capture predicate any more: the arcade does not stage-gate
+// captures. Every other boss launch is a solo capture dive from stage 1
+// onward (gg1-2_fx.s:1013-1043), one at a time behind the cflag, and the
+// attempt now rides the attack scheduler's boss alternation directly -- a
+// challenge stage simply never dispatches a boss. The pass-5 capture flag,
+// its minimum-formation threshold and the interim attempt timer are gone.
 
 /**
  * Which of the eight Challenging Stage routes this stage flies.

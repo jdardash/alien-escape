@@ -9,7 +9,7 @@
  * Two ways to consume a flight:
  *
  * - **Compiled tracks** (`entryPath`, `challengingPath`, `divePath`,
- *   `returnPath`, `captiveEscapePath`): the interpreter runs offline against
+ *   `returnPath`): the interpreter runs offline against
  *   a context frozen at build time and emits one sampled point per hardware
  *   frame. `pointOnPath`/`tangentAngle` and `flight.js`'s track walker are
  *   unchanged. Right for any flight whose reactive tokens can be resolved at
@@ -27,7 +27,9 @@ import {
   ATTACK_PATH_BOSS,
   ATTACK_PATH_RED,
   ATTACK_PATH_YELLOW,
+  BOSS_CARRYHOME_PATH,
   CHALLENGE_ROWS,
+  CONVOY_REGION,
   DB_2A3C,
   DB_2A6C,
   FLY_IN_BLOCKS,
@@ -39,7 +41,6 @@ import {
   asTrack,
   canvasToRaw,
   createFlightState,
-  directionToAngle,
   isDespawned,
   rawXToCanvasX,
   rawYToCanvasY,
@@ -229,7 +230,10 @@ const ATTACK_TABLES = {
  * coordinates): the enemy's live position, angle seed 0x0100 (pointing
  * 90 degrees), negate-rotation from objectId bit 1 (j_108A, gg1-2.s:314-323;
  * escorts inherit their boss's flag by passing `negateRotation` directly).
- * `role: 'capture'` enters the boss table at the solo capture dive.
+ * `role: 'capture'` enters the boss table at the solo capture dive;
+ * `role: 'rogue'` at `db_fltv_rogefgter` (offset 56, gg1-5.s:356-357) -- the
+ * plain descent a captured ship flies when its captor dies in formation,
+ * ending FF: it despawns and never homes.
  */
 export function createDiveFlightState(
   enemyType,
@@ -239,7 +243,11 @@ export function createDiveFlightState(
 ) {
   const table = ATTACK_TABLES[enemyType] ?? ATTACK_TABLES.zako;
   const entry =
-    role === 'capture' && enemyType === 'boss' ? ATTACK_PATH_BOSS.captureOffset : table.entry;
+    enemyType === 'boss' && role === 'capture'
+      ? ATTACK_PATH_BOSS.captureOffset
+      : enemyType === 'boss' && role === 'rogue'
+        ? ATTACK_PATH_BOSS.rogueOffset
+        : table.entry;
   const raw = canvasToRaw(toRomPoint(origin, screenScale(screen)));
 
   return createFlightState({
@@ -286,6 +294,42 @@ export function divePath(
   if (state.homed) points.push(context.homeTarget);
 
   return asTrack(points.map((point) => scalePoint(point, scale)));
+}
+
+/**
+ * The carry-home flight (`db_flv_cboss`, gg1-5.s:367-369): the captor
+ * flying back to formation with its captured fighter glued underneath --
+ * `12 18 14 FB 12 00 FF FF`, a descent beat and the FB home glide. The scene
+ * feeds the swaying slot as the live home target.
+ */
+export function createCarryHomeFlightState(origin, screen) {
+  const raw = canvasToRaw(toRomPoint(origin, screenScale(screen)));
+  return createFlightState({
+    region: BOSS_CARRYHOME_PATH,
+    rawX: raw.rawX,
+    rawY: raw.rawY,
+    // The boss finishes its hover facing straight down (f_21CB spun it there).
+    angle: 0x300,
+  });
+}
+
+/**
+ * The bonus-bee convoy leader's flight (`d_1B5F` -> `db_04EA`/`db_0473`/
+ * `db_04AB` by colour, gg1-5.s:370-420): the repainted formation bee dives,
+ * splits its two clones mid-run through the F2 tokens, and -- if it survives
+ * -- rides its FD tail home to the grid. `colour` is the stage band's index
+ * (0 Scorpion, 1 Spy Ship, 2 Flagship).
+ */
+export function createConvoyLeaderFlightState(colour, origin, screen, { negateRotation = false } = {}) {
+  const raw = canvasToRaw(toRomPoint(origin, screenScale(screen)));
+  return createFlightState({
+    region: CONVOY_REGION,
+    pc: CONVOY_REGION.entries[colour] ?? CONVOY_REGION.entries[0],
+    rawX: raw.rawX,
+    rawY: raw.rawY,
+    angle: 0x100,
+    negateRotation,
+  });
 }
 
 // ------------------------------------------------------- challenging stages
@@ -359,47 +403,7 @@ export function returnPath(target, screen) {
   return asTrack(points.map((point) => scalePoint(point, scale)));
 }
 
-// ---------------------------------------------------------- captive escape
-
-/**
- * The run a captured fighter makes when its captor dies in formation:
- * "it will swoop down on you... and go away". AUTHORED, in the real segment
- * encoding: the ROM has no path table for this flight (its rogue-fighter
- * path at boss offset 56 covers the formation-kill case Task 5 wires; this
- * is the interim swoop the capture scene already uses). One in-place spin --
- * the `00 rot frames` idiom the bonus paths use -- reads as the ship coming
- * loose, then a straight 4 px/frame run aimed at the player's column, off
- * the bottom, FF.
- */
-const CAPTIVE_ESCAPE_REGION = {
-  z80Base: 0,
-  bytes: [0x00, 0x14, 0x0c, 0x44, 0x00, 0xff, 0xff],
-};
-
-/** Total spin the opening segment turns through: rot 0x14 for 12 frames. */
-const CAPTIVE_ESCAPE_SPIN = 0x14 * 0x0c;
-
-export function captiveEscapePath(origin, playerX, screen) {
-  const scale = screenScale(screen);
-  const romOrigin = toRomPoint(origin, scale);
-  const raw = canvasToRaw(romOrigin);
-
-  // Aim at the player's column below the screen, computed once at launch --
-  // the frozen-vector model every ROM shot uses. The seed pre-compensates
-  // for the opening spin so the run leaves on the aimed heading.
-  const aimTarget = canvasToRaw({ x: playerX / scale, y: ROM_CANVAS.height + 30 });
-  const aim = directionToAngle(aimTarget.rawX - raw.rawX, aimTarget.rawY - raw.rawY);
-  const negate = playerX >= origin.x;
-  const spin = negate ? -CAPTIVE_ESCAPE_SPIN : CAPTIVE_ESCAPE_SPIN;
-
-  const state = createFlightState({
-    region: CAPTIVE_ESCAPE_REGION,
-    rawX: raw.rawX,
-    rawY: raw.rawY,
-    angle: aim - spin,
-    negateRotation: negate,
-  });
-
-  const points = compileFlight(state, {}, { stopWhen: flewOut });
-  return asTrack(points.map((point) => scalePoint(point, scale)));
-}
+// The authored captive-escape swoop this file used to carry is gone: the
+// formation-kill case now flies the ROM's own rogue-fighter path
+// (`createDiveFlightState` with `role: 'rogue'`), which descends and
+// despawns without ever aiming -- the cabinet's actual behaviour.

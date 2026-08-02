@@ -13,7 +13,6 @@ import {
   combatStageIndex,
   COMBAT_STAGE_ROWS,
   enemiesBomb,
-  captureAllowed,
   nextStage,
   STAGE_ROLLOVER,
   DifficultyRank,
@@ -230,23 +229,11 @@ describe('enemy bombing', () => {
   });
 });
 
-describe('capture gating', () => {
-  // Overturned in pass 6: the ROM never stage-gates captures. Every other
-  // boss launch is a solo capture dive from stage 1 (gg1-2_fx.s:1013-1043).
-  it('allows a beam from stage 1', () => {
-    expect(captureAllowed(1, 40)).toBe(true);
-    expect(captureAllowed(2, 40)).toBe(true);
-  });
-
-  it('never deploys a beam during a challenging stage', () => {
-    expect(captureAllowed(7, 40)).toBe(false);
-  });
-
-  it('needs at least one enemy left to be the captor', () => {
-    expect(captureAllowed(5, 0)).toBe(false);
-    expect(captureAllowed(5, 1)).toBe(true);
-  });
-});
+// The capture predicate is gone entirely: the ROM never stage-gates
+// captures. Every other boss launch IS the solo capture dive, from stage 1
+// (gg1-2_fx.s:1013-1043), gated only by the cflag -- and a challenge stage
+// never dispatches a boss at all. The attempt lives in the attack
+// scheduler's alternation, pinned in tests/attack.test.js.
 
 // The authored challenging-stage roster ("one rank plus four bosses") was
 // overturned in pass 6: the ROM flies the SAME 40 db_attk_wav_IDs over the
@@ -383,7 +370,6 @@ describe('the difficulty rank', () => {
   it('defaults to the factory rank when nobody asks for one', () => {
     expect(stageDifficulty(5)).toEqual(stageDifficulty(5, DifficultyRank.A));
     expect(enemiesBomb(1)).toBe(enemiesBomb(1, DifficultyRank.A));
-    expect(captureAllowed(4, 20)).toBe(captureAllowed(4, 20, DifficultyRank.A));
   });
 
   it('gives each letter its own sub-table through the machine rotation', () => {
@@ -422,12 +408,5 @@ describe('the difficulty rank', () => {
   it('holds entry fire to stage 2 whatever the operator set', () => {
     expect(enemiesFireDuringEntry(1)).toBe(false);
     expect(enemiesFireDuringEntry(2)).toBe(true);
-  });
-
-  it('allows a capture from stage 1 at every rank, but never in a bonus round', () => {
-    for (let rank = 0; rank < RANK_COUNT; rank += 1) {
-      expect(captureAllowed(1, 40, rank)).toBe(true);
-      expect(captureAllowed(3, 40, rank)).toBe(false);
-    }
   });
 });

@@ -50,15 +50,40 @@ export const TICK_FRAMES = 16;
 /** Slots in the launch pool (`bmbr_boss_pool`, 4 x 3 bytes in the ROM). */
 export const LAUNCH_POOL_SLOTS = 4;
 
+// ------------------------------------------------------ the bonus-bee arming
+
 /**
- * Which Zako launch becomes the transform pull.
+ * The transform trio's real trigger -- `f_1A80`, the "clone-attack" manager
+ * (gg1-2_fx.s:671-833). Not a launch counter and not a timer: the manager is
+ * gated per frame on `active_bug_count < new_stage_parms[0x0A]`, which is 0
+ * on stages 1-3 and every challenge stage (never arms) and 10 otherwise --
+ * an endgame set-piece, armed once fewer than ten bugs remain.
  *
- * Authored, interim: the ROM arms the trio through `f_1A80` when the live
- * count drops below `parms[10]`, once per stage -- that machine is Task 5's.
- * Until it lands, the pull stays on the launch schedule so the trio keeps
- * appearing, riding the rewritten scheduler's Zako dispatches.
+ * On arming, `_b_bbee_tmr` is set to 0xC0 and counts UP; the wrap to 0x100
+ * is the launch, 64 frames later. Bit 4 of the counter drives the warning
+ * flash: the chosen resting bee alternates its colour every 16 frames, about
+ * 4 Hz. The launch repaints the bee as the stage band's bonus ship, sends it
+ * down the per-colour convoy path, and self-disables the task -- one
+ * bonus-bee per stage arming. A bee killed mid-flash merely bails; the arm
+ * is only spent at the launch itself.
  */
-export const TRANSFORM_EVERY_NTH_ZAKO = 6;
+export const BONUS_BEE_TIMER_START = 0xc0;
+
+/** Frames from arm to launch: 0xC0 counting up to the 0x100 wrap. */
+export const BONUS_BEE_FLASH_FRAMES = 0x100 - BONUS_BEE_TIMER_START;
+
+/** Frames per flash half-cycle: bit 4 of the counter, ~4 Hz. */
+export const BONUS_BEE_FLASH_PERIOD_FRAMES = 0x10;
+
+/** The per-frame gate: `active_bug_count < parms[0x0A]`, 0 disables. */
+export function bonusBeeGateOpen(parms, aliveEnemies) {
+  return parms[10] > 0 && aliveEnemies < parms[10];
+}
+
+/** Whether the flashing bee shows its alternate colour this frame. */
+export function bonusBeeFlashOn(framesSinceArm) {
+  return ((BONUS_BEE_TIMER_START + framesSinceArm) & BONUS_BEE_FLASH_PERIOD_FRAMES) !== 0;
+}
 
 // --------------------------------------------------------------- bombing
 
@@ -151,8 +176,6 @@ export function createAttackScheduler(row) {
     bossToggle: 0,
     /** Rapid-fire endgame: live bugs below threshold with fire active. */
     continuousBombing: false,
-    /** Zako dispatches so far, for the interim transform divisor. */
-    zakoLaunches: 0,
   };
 }
 
@@ -182,18 +205,10 @@ function queuePool(pool, entries) {
  * emit now, or null (boss sorties go through the pool and emerge on the
  * following frames; a type with no candidate burns its reload silently).
  */
-function dispatch(state, type, context, result) {
+function dispatch(state, type, context) {
   if (!context.availableTypes.includes(type)) return null;
 
-  if (type === 'zako') {
-    state.zakoLaunches += 1;
-    if (context.transformStage && state.zakoLaunches % TRANSFORM_EVERY_NTH_ZAKO === 0) {
-      result.transformPull = true;
-      return null;
-    }
-    return { type: 'zako', role: 'attack' };
-  }
-
+  if (type === 'zako') return { type: 'zako', role: 'attack' };
   if (type === 'goei') return { type: 'goei', role: 'attack' };
 
   // Boss: alternate solo capture dives and escort sorties, both staged
@@ -223,8 +238,10 @@ function dispatch(state, type, context, result) {
  *
  * Runs whole hardware frames at the cabinet's 60.606 Hz out of the
  * accumulated delta and returns the next state, the launches to make (in
- * order), whether a launch became the transform pull, and the live flags the
- * scene reads: `continuousBombing` and this frame's bomb-drop mask.
+ * order), and the live flags the scene reads: `continuousBombing` and this
+ * frame's bomb-drop mask. The transform trio no longer rides a launch
+ * divisor here: its gate is `bonusBeeGateOpen` above, read by the scene
+ * against the live board.
  */
 export function advanceScheduler(
   state,
@@ -236,7 +253,6 @@ export function advanceScheduler(
     playerFireActive = true,
     escortsAvailable = 0,
     captureActive = false,
-    transformStage = false,
   } = {},
 ) {
   const next = cloneScheduler(state);
@@ -245,9 +261,8 @@ export function advanceScheduler(
     playerFireActive,
     escortsAvailable,
     captureActive,
-    transformStage,
   };
-  const result = { launches: [], transformPull: false };
+  const result = { launches: [] };
 
   // The tiny epsilon keeps an exact multiple of FRAME_MS from losing a frame
   // to floating-point rounding.
@@ -307,7 +322,7 @@ export function advanceScheduler(
       // Reload BEFORE dispatch: an expiry with no candidate still burns a
       // full cycle.
       next.timers[type] = next.reloads[type];
-      const launch = dispatch(next, type, context, result);
+      const launch = dispatch(next, type, context);
       if (launch) result.launches.push(launch);
       break;
     }
@@ -316,7 +331,6 @@ export function advanceScheduler(
   return {
     state: next,
     launches: result.launches,
-    transformPull: result.transformPull,
     continuousBombing: next.continuousBombing,
     bombFlags: next.bombFlags,
   };

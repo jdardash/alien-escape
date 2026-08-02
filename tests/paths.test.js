@@ -7,10 +7,11 @@ import {
   entrySpawnPoint,
   createEntryFlightState,
   createDiveFlightState,
+  createCarryHomeFlightState,
+  createConvoyLeaderFlightState,
   divePath,
   returnPath,
   challengingPath,
-  captiveEscapePath,
   screenScale,
   FLY_IN_PATH_COUNT,
   FLY_IN_INDEX_COUNT,
@@ -397,19 +398,110 @@ describe('re-entry', () => {
   });
 });
 
-describe('captive escape', () => {
-  it('swoops off the bottom of the screen for good', () => {
-    const origin = { x: screen.width / 2, y: screen.height * 0.35 };
-    const path = captiveEscapePath(origin, screen.width * 0.7, screen);
-    const end = pointOnPath(path, 1);
-    expect(end.y).toBeGreaterThan(screen.height);
+/** Run a live state to completion, collecting every event it raises. */
+function runFlight(state, context = {}, maxFrames = 4000) {
+  const events = [];
+  for (let frame = 0; frame < maxFrames && !state.done; frame += 1) {
+    events.push(...stepFlight(state, context));
+  }
+  return events;
+}
+
+describe('the capture flights', () => {
+  const origin = { x: screen.width / 2, y: screen.height * 0.2 };
+  const home = { x: screen.width * 0.4 / scale, y: 60 };
+
+  it('flies the capture entry: one F4 aim, then the in-place stall the beam plays over', () => {
+    const state = createDiveFlightState('boss', origin, screen, { role: 'capture' });
+    const context = { playerX: 90, homeTarget: home };
+
+    let aim = null;
+    let stalled = false;
+    for (let frame = 0; frame < 600 && !stalled; frame += 1) {
+      for (const event of stepFlight(state, context)) {
+        if (event.type === 'captureAim') aim = event;
+      }
+      if (aim && state.vx === 0 && state.vy === 0 && !state.done) stalled = true;
+    }
+
+    // The aim is the player's sprite X clamped to the beam lane, once.
+    expect(aim).not.toBeNull();
+    expect(aim.targetSpriteX).toBe(Math.min(Math.max(90 + 10, 0x29), 0xc9));
+    // The `00 FC FF` stall: the boss stops translating low on the field.
+    expect(stalled).toBe(true);
+    expect(toCanvas(state).y).toBeGreaterThan(190);
   });
 
-  it('leans toward the player it was aimed at', () => {
-    const origin = { x: screen.width / 2, y: screen.height * 0.35 };
-    const left = pointOnPath(captiveEscapePath(origin, screen.width * 0.2, screen), 1);
-    const right = pointOnPath(captiveEscapePath(origin, screen.width * 0.8, screen), 1);
-    expect(left.x).toBeLessThan(origin.x);
-    expect(right.x).toBeGreaterThan(origin.x);
+  it('retreats home after a force-expired stall, the l_22E3 miss', () => {
+    const state = createDiveFlightState('boss', origin, screen, { role: 'capture' });
+    const context = { playerX: 112, homeTarget: home };
+    for (let frame = 0; frame < 600; frame += 1) {
+      stepFlight(state, context);
+      if (state.vx === 0 && state.vy === 0 && state.segTimer > 2) break;
+    }
+    // The miss: expire the stall and the retreat tail flies it home.
+    state.segTimer = 1;
+    runFlight(state, context);
+    expect(state.homed).toBe(true);
+  });
+
+  it('carries the prize home on db_flv_cboss to the live slot', () => {
+    const state = createCarryHomeFlightState(
+      { x: screen.width * 0.6, y: screen.height * 0.72 },
+      screen,
+    );
+    runFlight(state, { homeTarget: home });
+    expect(state.done).toBe(true);
+    expect(state.homed).toBe(true);
+  });
+
+  it('flies the rogue fighter out and never home', () => {
+    const state = createDiveFlightState('boss', origin, screen, { role: 'rogue' });
+    runFlight(state, { homeTarget: home });
+    expect(state.done).toBe(true);
+    expect(state.homed).toBe(false);
+  });
+
+  it('sends the escort entry home through the FA gate outside continuous bombing', () => {
+    const state = createDiveFlightState('boss', origin, screen, {});
+    runFlight(state, { playerX: 112, homeTarget: home, continuousBombing: false });
+    expect(state.homed).toBe(true);
+  });
+});
+
+describe('the bonus-bee convoy', () => {
+  const origin = { x: screen.width * 0.55, y: screen.height * 0.25 };
+  const home = { x: origin.x / scale, y: origin.y / scale };
+
+  it.each([[0], [1], [2]])(
+    'colour %i: the leader splits exactly two clones mid-dive and flies home',
+    (colour) => {
+      const state = createConvoyLeaderFlightState(colour, origin, screen);
+      const events = runFlight(state, { playerX: 112, homeTarget: home });
+      const clones = events.filter((event) => event.type === 'cloneSplit');
+      expect(clones).toHaveLength(2);
+      // The unkilled leader returns to the grid: the FD tail turns it home.
+      expect(state.homed).toBe(true);
+    },
+  );
+
+  it('clones dive at the player and despawn at their FF, never homing', () => {
+    const state = createConvoyLeaderFlightState(0, origin, screen);
+    const events = runFlight(state, { playerX: 112, homeTarget: home });
+    for (const { clone } of events.filter((event) => event.type === 'cloneSplit')) {
+      runFlight(clone, { playerX: 112 });
+      expect(clone.done).toBe(true);
+      expect(clone.homed).toBe(false);
+    }
+  });
+
+  it('colour 2 gives its two clones different streams', () => {
+    const state = createConvoyLeaderFlightState(2, origin, screen);
+    const events = runFlight(state, { playerX: 112, homeTarget: home });
+    const pcs = events
+      .filter((event) => event.type === 'cloneSplit')
+      .map((event) => event.clone.pc);
+    // db_04AB splits at p_flv_04C6 and p_flv_04CF -- two distinct offsets.
+    expect(new Set(pcs).size).toBe(2);
   });
 });

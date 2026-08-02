@@ -5,11 +5,15 @@ import {
   BOMB_ARM_FRAMES,
   BOMB_DROP_MIN_Y,
   BOMB_SPACING_FRAMES,
+  BONUS_BEE_FLASH_FRAMES,
+  BONUS_BEE_FLASH_PERIOD_FRAMES,
+  BONUS_BEE_TIMER_START,
   LAUNCH_POOL_SLOTS,
   TICK_FRAMES,
-  TRANSFORM_EVERY_NTH_ZAKO,
   advanceScheduler,
   bombAimVx,
+  bonusBeeFlashOn,
+  bonusBeeGateOpen,
   createAttackScheduler,
   nextBombDrop,
 } from '../src/systems/attack.js';
@@ -30,14 +34,12 @@ const board = { aliveEnemies: 40, escortsAvailable: 2 };
 function run(state, frames, context = {}) {
   let current = state;
   const launches = [];
-  let pulls = 0;
   for (let i = 0; i < frames; i += 1) {
     const result = advanceScheduler(current, FRAME_MS, { ...board, ...context });
     current = result.state;
     launches.push(...result.launches);
-    if (result.transformPull) pulls += 1;
   }
-  return { state: current, launches, pulls };
+  return { state: current, launches };
 }
 
 describe('the initial timers (new_stage.s:100-103)', () => {
@@ -209,24 +211,42 @@ describe('the bomb mask exposure', () => {
   });
 });
 
-describe('the interim transform pull', () => {
-  it('turns every Nth yellow dispatch into the pull on a transform stage', () => {
-    const { launches, pulls } = run(createAttackScheduler(row), 2000, {
-      availableTypes: ['zako'],
-      transformStage: true,
-    });
-    const zako = launches.filter((launch) => launch.type === 'zako').length;
-    const fires = zako + pulls;
-    expect(fires).toBeGreaterThanOrEqual(TRANSFORM_EVERY_NTH_ZAKO);
-    expect(pulls).toBe(Math.floor(fires / TRANSFORM_EVERY_NTH_ZAKO));
+describe('the bonus-bee arming (f_1A80, gg1-2_fx.s:671-833)', () => {
+  it('keeps the ROM counter constants', () => {
+    expect(BONUS_BEE_TIMER_START).toBe(0xc0);
+    // 0xC0 counting up to the 0x100 wrap: 64 frames from arm to launch.
+    expect(BONUS_BEE_FLASH_FRAMES).toBe(64);
+    // Bit 4 of the counter: the colour alternates every 16 frames, ~4 Hz.
+    expect(BONUS_BEE_FLASH_PERIOD_FRAMES).toBe(16);
   });
 
-  it('never pulls on a stage with no transform type', () => {
-    const plain = run(createAttackScheduler(row), 2000, {
-      availableTypes: ['zako'],
-      transformStage: false,
-    });
-    expect(plain.pulls).toBe(0);
+  it('opens the gate only when live bugs drop below parms[0x0A]', () => {
+    const parms = [...row.parms];
+    parms[10] = 10;
+    expect(bonusBeeGateOpen(parms, 40)).toBe(false);
+    expect(bonusBeeGateOpen(parms, 10)).toBe(false);
+    expect(bonusBeeGateOpen(parms, 9)).toBe(true);
+    expect(bonusBeeGateOpen(parms, 1)).toBe(true);
+  });
+
+  it('never opens where the parameter is zero -- stages 1-3 and challenges', () => {
+    // Stage 1's own row carries parms[10] = 0.
+    expect(row.parms[10]).toBe(0);
+    expect(bonusBeeGateOpen(row.parms, 0)).toBe(false);
+    expect(bonusBeeGateOpen(row.parms, 5)).toBe(false);
+  });
+
+  it('flashes on bit 4 of the counter: 16 off, 16 on, 16 off, 16 on', () => {
+    // The counter starts at 0xC0, so the first sixteen frames show the
+    // bee's own colour and the flash lands on frames 16-31 and 48-63.
+    for (let frame = 0; frame < BONUS_BEE_FLASH_FRAMES; frame += 1) {
+      const expected = ((0xc0 + frame) & 0x10) !== 0;
+      expect(bonusBeeFlashOn(frame)).toBe(expected);
+    }
+    expect(bonusBeeFlashOn(0)).toBe(false);
+    expect(bonusBeeFlashOn(16)).toBe(true);
+    expect(bonusBeeFlashOn(32)).toBe(false);
+    expect(bonusBeeFlashOn(48)).toBe(true);
   });
 });
 

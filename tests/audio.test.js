@@ -3,9 +3,12 @@ import { readdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import {
   challengeResultSound,
+  channelledSoundBank,
   deathSoundFor,
   playerShotSound,
   SOUND_NAMES,
+  SOUND_VOICES,
+  soundsSilencedBy,
 } from '../src/systems/audio.js';
 import { SOUND_SPECS } from '../src/audio/soundBank.js';
 import { EnemyType, FORMATION_SIZE } from '../src/systems/formation.js';
@@ -84,6 +87,116 @@ describe('the set of sounds', () => {
 
   it('cannot be edited at run time by a scene that got hold of it', () => {
     expect(Object.isFrozen(SOUND_NAMES)).toBe(true);
+  });
+});
+
+/**
+ * The cabinet's voice contention, after `d_0703_snd_parms` (gg1-7.s): one WSG,
+ * three voices, and an effect starting on a voice overwrites whatever held it.
+ * This is what keeps a busy board from becoming a pile of overlapping tails --
+ * the bug this block exists to pin down was the two-minute name-entry tune
+ * repeating under the attract loop forever.
+ */
+describe('WSG voice contention', () => {
+  it('assigns voices to exactly the sounds the game has', () => {
+    expect(Object.keys(SOUND_VOICES).sort()).toEqual([...SOUND_NAMES].sort());
+  });
+
+  it('only ever names the three voices the chip has', () => {
+    for (const voices of Object.values(SOUND_VOICES)) {
+      for (const voice of voices) expect([0, 1, 2]).toContain(voice);
+    }
+  });
+
+  it('lets a tune take the whole chip', () => {
+    expect(soundsSilencedBy('gameOverTune', ['bossDeath', 'fighterShot1', 'beamOpen']).sort()).toEqual(
+      ['beamOpen', 'bossDeath', 'fighterShot1'],
+    );
+  });
+
+  it('keeps single-voice effects out of each other\'s way', () => {
+    expect(soundsSilencedBy('zakoDeath', ['fighterShot1', 'beamOpen'])).toEqual([]);
+    expect(soundsSilencedBy('fighterShot1', ['bossDeath', 'beamCapture'])).toEqual([]);
+  });
+
+  it('replaces a cry with a cry, shot with shot, beam with beam', () => {
+    expect(soundsSilencedBy('bossDeath', ['zakoDeath'])).toEqual(['zakoDeath']);
+    expect(soundsSilencedBy('fighterShot2', ['fighterShot1'])).toEqual(['fighterShot1']);
+    expect(soundsSilencedBy('beamCapture', ['beamOpen'])).toEqual(['beamOpen']);
+  });
+
+  it('never silences the loops or the 54XX explosion, in either direction', () => {
+    expect(soundsSilencedBy('gameOverTune', ['ambient', 'enemyDive', 'explosion'])).toEqual([]);
+    expect(soundsSilencedBy('ambient', SOUND_NAMES.filter((n) => n !== 'ambient'))).toEqual([]);
+    expect(soundsSilencedBy('explosion', ['zakoDeath', 'stageFlag'])).toEqual([]);
+  });
+
+  it('never asks a sound to silence itself', () => {
+    for (const name of SOUND_NAMES) {
+      expect(soundsSilencedBy(name, [name])).toEqual([]);
+    }
+  });
+});
+
+describe('the channelled sound bank', () => {
+  /** A stand-in Phaser sound manager: `add` returns a recording stub. */
+  function stubManager() {
+    const sounds = new Map();
+    return {
+      sounds,
+      add(key) {
+        const sound = {
+          key,
+          isPlaying: false,
+          play() {
+            this.isPlaying = true;
+          },
+          stop() {
+            this.isPlaying = false;
+          },
+        };
+        sounds.set(key, sound);
+        return sound;
+      },
+    };
+  }
+
+  it('stops the voice holder before playing over it', () => {
+    const manager = stubManager();
+    const bank = channelledSoundBank(manager);
+
+    bank.zakoDeath.play({ volume: 0.4 });
+    expect(bank.zakoDeath.isPlaying).toBe(true);
+
+    bank.bossDeath.play({ volume: 0.4 });
+    expect(manager.sounds.get('zakoDeath').isPlaying).toBe(false);
+    expect(bank.bossDeath.isPlaying).toBe(true);
+  });
+
+  it('lets independent voices ring together, as the chip does', () => {
+    const bank = channelledSoundBank(stubManager());
+
+    bank.fighterShot1.play();
+    bank.zakoDeath.play();
+    bank.beamOpen.play();
+    expect(bank.fighterShot1.isPlaying).toBe(true);
+    expect(bank.zakoDeath.isPlaying).toBe(true);
+    expect(bank.beamOpen.isPlaying).toBe(true);
+  });
+
+  it('gives a tune the whole chip but leaves the gated loops alone', () => {
+    const manager = stubManager();
+    const bank = channelledSoundBank(manager);
+
+    bank.ambient.play({ loop: true });
+    bank.fighterShot1.play();
+    bank.bossDeath.play();
+    bank.gameOverTune.play();
+
+    expect(manager.sounds.get('fighterShot1').isPlaying).toBe(false);
+    expect(manager.sounds.get('bossDeath').isPlaying).toBe(false);
+    expect(bank.ambient.isPlaying).toBe(true);
+    expect(bank.gameOverTune.isPlaying).toBe(true);
   });
 });
 

@@ -148,108 +148,42 @@ export const DIVE = {
   maxBombs: 8,
 };
 
+/**
+ * The capture's rules no longer live here: the beam clock (11 strips at the
+ * difficulty row's frames-per-strip, the fixed 64-frame grab window), the
+ * +/-27 px catch test, the pull arithmetic and the mission-end table are the
+ * ROM's own machines in `src/systems/capture.js`, and the captor flies the
+ * boss table's real capture entry (`db_0454`) through the path interpreter.
+ * What remains is presentation, in screen pixels.
+ */
 export const CAPTURE = {
-  /** How often a boss may attempt a beam, once the stage allows it. */
-  attemptIntervalMs: 12000,
-  descendDurationMs: 2200,
   /**
-   * How far a descending boss may slide sideways to line its beam up.
-   *
-   * The arcade's capture dive carries an aim token that reads the player's X
-   * and clamps it to a lane, so the boss comes down *where the player is*
-   * rather than straight down its own column. Without that the beam opens over
-   * empty screen and the signature mechanic can be ignored by standing
-   * somewhere else, which is what an earlier revision did.
-   *
-   * Clamped rather than exact, so the aim is a commitment made on the way down
-   * and not a tracking beam: a player who moves while the boss descends can
-   * still get out from under it, which is the skill the mechanic is testing.
+   * Drawn width of the cone at its floor: the tile arrangement is 6 tiles =
+   * 48 ROM px wide (`d_23A1`, gg1-3.s), through the x3 adapter. The CATCH
+   * window is slightly wider -- +/-27 ROM px -- exactly as on the cabinet,
+   * where the beam's field reaches a shade past its picture.
    */
-  aimTravelPx: 190,
+  beamWidth: 144,
   /**
-   * How far down a boss comes to open its beam.
-   *
-   * The arcade boss "peels off and dives straight down... stops two inches
-   * above the bottom of the screen" before the beam fans out. It has to come
-   * down into the player's half of the field, because the threat of the beam
-   * is that it arrives where the player already is and has to be steered
-   * around. Opening it at mid-screen, as an earlier revision did, left a
-   * hazard hanging in space that could be ignored by simply not flying up.
-   *
-   * Measured back from the player's row rather than forward from the
-   * formation, since it is the distance to the player that the mechanic is
-   * about: 200px is roughly a second and a half of dodging time.
+   * From the mouth of the beam past the bottom edge: the boss stalls at raw
+   * Y 0x48 (canvas 209, screen 627), and the fan covers the field below it.
    */
-  descendToY: PLAYER.y - 200,
-  /**
-   * How long the beam takes to fan out, and how long it stays out.
-   *
-   * The arcade grows the beam over about eleven strips at six frames each and
-   * then holds it for a hardcoded 64 frames, which is roughly 1.1 seconds
-   * opening and 1.05 held at 60.606 Hz. This is a little more generous than
-   * that on the hold, because a browser player has no muscle memory for the
-   * timing and the beam here has further to reach, but it is no longer the 2.6
-   * seconds an earlier revision held it for -- at that length the beam stopped
-   * being a moment and became a state of the board.
-   */
-  beamOpenMs: 1100,
-  beamHoldMs: 1400,
-  /**
-   * Width of the column that catches the player.
-   *
-   * The arcade tests roughly +/-27 pixels around the beam's centre on a
-   * 224-wide field. This screen is exactly three times that, so the same test
-   * is +/-81 here, and the beam is that wide. An earlier revision used 76 --
-   * less than half the arcade's catchment -- which, together with a boss that
-   * did not aim, made the capture something a player could sit out rather than
-   * something they had to fly out of.
-   */
-  beamWidth: 162,
-  /**
-   * How far the beam reaches below its boss.
-   *
-   * Sized to run from the mouth of the beam to the bottom edge of the screen,
-   * which is what the fan-shaped field does in the arcade, and which is what
-   * makes standing anywhere in the boss's column a decision. The artwork is a
-   * cone taller than the screen, so it is scaled to this rather than by eye.
-   */
-  beamLength: 250,
+  beamLength: 240,
   /** Gap between the boss and the mouth of its beam. */
   beamOffsetY: 26,
   /**
-   * The beam as the cabinet draws it: a fan of horizontal strips revealed
-   * top-down while it opens, colour-cycling while it waits, furled bottom-up
-   * when it gives up. The strips land inside the open/hold windows above, and
-   * the retract is purely visual -- the beam has already stopped being
-   * dangerous by the time it plays.
+   * The shimmer clock: the ROM rewrites the cone's colour RAM at 15 Hz
+   * (`(frame>>2)&3`), one palette step every four hardware frames = 66 ms.
    */
-  beamStrips: 12,
-  beamCycleMs: 100,
-  beamRetractMs: 300,
-  /**
-   * How far up the beam the player has to be dragged to be taken.
-   *
-   * With the beam mouth at `descendToY + beamOffsetY` this leaves the player
-   * about a second of being pulled before the capture commits, which is the
-   * window to fly out sideways.
-   */
-  captureDepth: 80,
-  pullStrength: 90,
-  captureRiseMs: 1000,
+  beamCycleMs: 66,
+  /** The rescued ship's spin-down to the dock. */
   dockDurationMs: 1400,
-  /** How far below its captor a held fighter is drawn. */
-  captiveOffsetY: 34,
   /**
-   * How often a boss holding a captured fighter is picked to lead the dive.
-   *
-   * The captive only comes back if its captor is destroyed on a dive, so a
-   * captor that never leaves formation makes the rescue unreachable. Weighting
-   * the pick toward it keeps the second half of the mechanic in play instead
-   * of leaving it to a one-in-forty draw.
+   * The glue distance between captor and captive: 0x10 = 16 ROM px through
+   * the x3 adapter. Below the boss during the carry-home, above it once the
+   * 36-frame settle has run (`f_19B2`, gg1-2_fx.s:510-656).
    */
-  captorDiveChance: 0.6,
-  /** How long a captive shot free of its captor takes to fall off screen. */
-  captiveEscapeMs: 1400,
+  captiveOffsetY: 48,
 };
 
 /** Horizontal gap between the player's ship and a docked dual fighter. */
@@ -335,16 +269,13 @@ export const BOSS_SPRITE = { healthy: 'boss', damaged: 'bossDamaged' };
  * Galaxian's blue with red wingtips.
  */
 export const TRANSFORM = {
-  // When a Zako is pulled is no longer a clock: every Nth Zako attack launch
-  // becomes the pull instead (`TRANSFORM_EVERY_NTH_ZAKO` in
-  // `src/systems/attack.js`), which is the arcade's schedule-driven trigger.
-  /** Warning pulse before the change. */
-  pulseDurationMs: 260,
-  pulseRepeats: 5,
-  /** How long the trio's attack run lasts. */
-  runDurationMs: 3400,
-  /** Horizontal gap between the three ships as they set off. */
-  spacingX: 44,
+  // The trigger, the warning flash and the trio's flight are the ROM's own
+  // now: `f_1A80` arms once per stage when the live count drops below the
+  // difficulty row's clone-attack gate, flashes the chosen bee at 4 Hz for
+  // 64 frames, and flies the repainted leader down the per-colour convoy
+  // path, splitting two clones mid-dive through the F2 tokens. See
+  // `bonusBeeGateOpen`/`bonusBeeFlashOn` in `src/systems/attack.js` and
+  // `CONVOY_REGION` in `src/systems/flightData.js`.
   /**
    * Screen pixels per art pixel.
    *
