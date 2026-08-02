@@ -1,21 +1,39 @@
-# Alien Escape - a Galaga replica
+# Alien Escape
 
-A Galaga replica where the game rules live in pure, dependency-free ES modules that never import Phaser, so they can be unit tested headlessly. The Phaser scenes are thin orchestration over that logic.
-
-> **Unofficial fan tribute.** Not affiliated with, endorsed by, or sponsored by Bandai Namco Entertainment Inc. *Galaga* is their trademark, used here only to describe what this project reimplements.
-
-## [Play it in your browser](https://jdardash.github.io/alien-escape/)
+A Galaga replica for the browser, where the game rules live in pure, dependency-free ES modules that never import Phaser, so they can be unit tested headlessly. The Phaser scenes are thin orchestration over that logic.
 
 [![CI](https://img.shields.io/github/actions/workflow/status/jdardash/alien-escape/ci.yml?branch=main&label=CI)](https://github.com/jdardash/alien-escape/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-525%20passing-success)](tests/)
+[![Tests](https://img.shields.io/badge/tests-756%20passing-success)](tests/)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Build step](https://img.shields.io/badge/build%20step-none-lightgrey)](index.html)
 
+**[Play it in your browser](https://jdardash.github.io/alien-escape/)** — nothing to install and nothing to build; the demo is this repository, served as-is.
+
 ![Alien Escape formation](docs/screenshots/formation.png)
 
----
+> **Unofficial fan tribute.** Not affiliated with, endorsed by, or sponsored by Bandai Namco Entertainment Inc. *Galaga* is their trademark, used here only to describe what this project reimplements.
 
-## Why this repo is structured the way it is
+## Contents
+
+- [Provenance](#provenance)
+- [Architecture](#architecture)
+- [Galaga mechanics implemented](#galaga-mechanics-implemented)
+- [Defects found and fixed](#defects-found-and-fixed)
+- [Testing](#testing)
+- [Run it](#run-it)
+- [Controls](#controls)
+- [Screenshots](#screenshots)
+- [Built with](#built-with)
+- [Contributors](#contributors)
+- [License](#license)
+
+## Provenance
+
+The gameplay data is the ROM's own: the caravan rows, flight bytecode, difficulty nibbles, capture machine and starfield table are transcribed byte for byte from the [hackbar/galaga](https://github.com/hackbar/galaga) disassembly, the [ZaneLogi research corpus](https://github.com/ZaneLogi/ZaneLogi.github.io/tree/main/galaga_clone) and MAME's starfield sources, each table cited to its source line and pinned by tests. The artwork and audio are original on purpose — see [License](#license).
+
+The full audit of what matches the cabinet and what does not is [docs/fidelity-report.md](docs/fidelity-report.md). How this project compares to every other open-source Galaga on GitHub — including the one other project that attempts ROM-level accuracy — is documented in [docs/comparison-galaga-arcade.md](docs/comparison-galaga-arcade.md).
+
+## Architecture
 
 Arcade game code has a well-known failure mode: the rules of the game get tangled into the rendering framework, and then nothing can be tested without spinning up a browser. The original version of this project had that shape, with 867 lines of gameplay logic living inside a single Phaser scene.
 
@@ -29,14 +47,20 @@ lib/phaser.js         vendored, loaded as a classic script (no CDN dependency)
 src/main.js           Phaser config, scene registration
 src/config.js         tuning constants in one place
 src/systems/          PURE. No Phaser import. Fully unit tested.
-  formation.js        40-slot grid, breathing, sway, entry flights
-  caravans.js         the 13 entrance rows, in the arcade's own path-byte encoding
-  pathcode.js         the path bytecode interpreter: per-frame heading deltas
-  paths.js            every flight path as a byte program: 22 fly-ins, 8 dives, more
-  flight.js           frame-rate-independent traversal of a path
-  difficulty.js       the 4-rank x 26-stage x 10-parameter difficulty table
-  attack.js           per-type launch counters, transform pull, the no-fire bug
-  starfield.js        the 63-star LFSR hardware field: scroll, stop, blink
+  formation.js        40-slot grid, the ROM's sway and bitmap-pulse motion
+  caravanData.js      the ROM's stage tables, byte for byte: caravan rows, wave IDs
+  caravans.js         the stream compile and the one-byte-per-frame wave launcher
+  flightData.js       the ROM's path bytes: 22 fly-ins, dive tables, capture paths
+  pathcode.js         the segment-bytecode interpreter: octant motion, the tokens
+  paths.js            compiled tracks over that bytecode, one point per frame
+  flight.js           frame-rate-independent flights, precompiled or live
+  difficultyData.js   the ROM's difficulty bytes: the nibble and reload tables
+  difficulty.js       the nibble unpack and the per-frame bomber configuration
+  attack.js           the attack scheduler: boss pool, capture turns, the no-fire bug
+  beam.js             the tractor beam as strips: which exist, what colour
+  starData.js         MAME's 252-star table, brightness and speed maps
+  starfield.js        the 05XX starfield: set selection, scroll, freeze, reverse
+  animation.js        the shared animation clock: wing flap, stepped rotation
   scoring.js          score tables, extra-life schemes
   stages.js           stage progression, difficulty rank, transform cycle, rollover
   capture.js          tractor beam capture and rescue state machine
@@ -50,6 +74,7 @@ src/systems/          PURE. No Phaser import. Fully unit tested.
   audio.js            which sound plays when
 src/art/              PURE. Every ship, drawn as a 16 x 16 pixel grid.
   pixelArt.js         the grids and palettes, plus a strict parser
+  font.js             an original 8x8 arcade-style bitmap font
   textures.js         the one seam that turns a grid into a Phaser texture
   localArt.js         optional local sprite overrides; see docs/local-art.md
   crt.js              the monitor: master volume and the scanline overlay
@@ -75,10 +100,10 @@ The scenes still do real work, but it is orchestration: create sprites, read inp
 ## Galaga mechanics implemented
 
 - **40-slot formation**: 4 Boss Galaga, 16 Goei, 20 Zako across five rows of a 10-column grid
-- **Entrance patterns fixed per stage**, each flown as five flights of eight, selected on the arcade's own cycle: `combatStageIndex` reproduces the ROM's index arithmetic — seventeen rows, counting combat stages only, wrapping past stage 23 by four. All thirteen caravan rows exist and they select across **22 fly-in path blocks**, the cabinet's own count, each a byte program of per-frame heading deltas run through the interpreter in [src/systems/pathcode.js](src/systems/pathcode.js). Row 0 is the arcade's stage-1 row byte for byte: pairs from both sides, then single file
-- **Formation breathing and sway**: the grid expands and contracts horizontally while drifting, clamped so the outermost column never leaves the screen
-- **Dive attacks from a family of eight dive blocks**, selected per enemy type by per-stage flight vectors, launched by per-type counters out of the difficulty table rather than by a timer: each type has its own cadence, the air holds only so many attackers, that ceiling rises as a stage drags on, and the counters reload from the faster reload vectors from stage 8. Attackers release up to their continuous-bomb allowance from the aim band over your column. Nothing ever fires from inside the formation, no more than eight enemy shots exist at once, and stage 1 does not bomb at all — the opening difficulty row has its bomb flags at zero, so the first screen can only kill you by flying into you
-- **Tractor beam capture**: a Boss Galaga breaks formation, descends into your half of the field *aiming at your column*, opens a beam, and pulls the fighter in; you lose a life but the ship is held above its captor. Captures are gated the way the arcade gates them — never on stage 1, never during a bonus round, and never once the formation is down to a handful
+- **Entrances launched by the ROM's own byte-stream machine**: each stage's caravan row — all thirteen, byte for byte — is compiled to a flat stream and walked one byte per frame on an 8-frame beat, five waves of eight with the four bosses arriving in wave 2, plus extra fly-through "transient" enemies from stage 4 that swoop at your column and leave without ever joining the grid. The paths are the ROM's **22 fly-in blocks**, run as segment bytecode — per-axis speed nibbles, a 10-bit angle, mirrored pairs by negated rotation — through the interpreter in [src/systems/pathcode.js](src/systems/pathcode.js)
+- **The ROM's formation motion**: a triangle sway during the fly-in, a coast back to centre, then the bitmap-driven pulse that accordions the columns and rows — outer columns sweeping, inner ones barely moving, peak sway meeting the screen edge exactly
+- **Dive attacks from the ROM's own tables and scheduler**: per-type attack paths run as bytecode, launched by the arcade's 16-frame tick over the real 4-rank x 26-stage nibble table, with reload values recomputed every frame from how many enemies are left and how long the stage has run — the longer you camp, the harder it gets. Squads peel off through a boss pool one member per frame; below the endgame threshold divers stop going home and bomb continuously. Bombs arm at launch, drop only in the lower field, and each one is aimed once and frozen, which is why dodging works. Nothing ever fires from inside the formation and no more than eight enemy shots exist at once
+- **Tractor beam capture**: every other boss sortie is a capture mission — from stage 1, as on the cabinet. The boss aims once at your column, stalls low, and unfurls the beam strip by strip (faster on later stages), then holds a fixed grab window in which capture is a positional test: no drag, full control, fly out or be taken. A caught ship costs a life and is held above its captor; only one can be held at a time
 - **A captive that fights back**: the held ship bombs you on its captor's dive, and if you shoot that captor while it is still in formation the ship breaks loose, swoops at your column, fires once and is gone for good
 - **Dual fighter rescue**: destroy the captor *while it is diving* and the ship docks, giving a double-width fighter with doubled firepower and a four-bullet limit instead of two. The second ship is a real hitbox, so the upgrade is paid for
 - **Boss Galaga takes two hits**, turning from green to blue on the first
@@ -113,7 +138,7 @@ These were found by reading the original `GameScene.js` before rewriting it. The
 
 ```bash
 npm install
-npm test        # vitest run  - 525 tests across 24 files
+npm test        # vitest run - 756 tests across 30 files
 npm run lint    # eslint .
 ```
 
@@ -121,17 +146,21 @@ Every test targets `src/systems/`. There is no canvas, no jsdom game harness, an
 
 **Deliberately not tested: Phaser rendering.** Verifying that a sprite drew at the expected pixel needs a browser harness and a screenshot baseline, and it would test Phaser rather than this project. The value is in the rules, so the rules are what is covered. The scenes are kept thin specifically so that the untested surface stays small.
 
-## Run it locally
+## Run it
+
+**Just want to play?** [Open the demo](https://jdardash.github.io/alien-escape/). Nothing to install: it is the repository, served as-is.
+
+**Running it locally** takes two commands and needs only [Node 20+](https://nodejs.org):
 
 ```bash
 git clone https://github.com/jdardash/alien-escape.git
 cd alien-escape
-npm run serve     # python -m http.server 8000
+npm start
 ```
 
-Then open <http://localhost:8000>.
+That serves the repository root and opens the game in your browser. There is nothing to install first — `npm start` runs [tools/serve.js](tools/serve.js), a dependency-free static server, so no `npm install` and no build step stand between a clone and a playable game. `npm install` is only needed to run the tests. If port 8000 is taken it moves up until it finds a free one and prints the URL it settled on; `npm run serve` does the same without opening a browser, and `--port 9000` picks a different starting point.
 
-The project is native ESM with no bundler. **Opening `index.html` directly from the filesystem will not work** - browsers block `type="module"` scripts loaded over `file://` under the module CORS rules, and the game will fail to start. It has to be served over HTTP. Any static server will do; `npm run serve` just uses Python's built-in one so there is no extra dependency.
+The project is native ESM with no bundler. **Opening `index.html` directly from the filesystem will not work** — browsers block `type="module"` scripts loaded over `file://` under the module CORS rules, and the game will fail to start. It has to be served over HTTP. Any static server will do; the one in `tools/` is here so that no one has to go and find one.
 
 Because there is no build step, GitHub Pages serves the repository root unchanged. What runs locally is byte-for-byte what runs on the live demo.
 
@@ -152,12 +181,10 @@ A gamepad works everywhere the keyboard does: stick or d-pad to move, a face but
 
 Leave the attract screen alone for half a minute and the machine plays itself, as the cabinet does. Any start button takes the game off it.
 
-How this project compares to every other open-source Galaga on GitHub — including the one other project that attempts ROM-level accuracy — is documented in [docs/comparison-galaga-arcade.md](docs/comparison-galaga-arcade.md).
-
 ## Screenshots
 
 | | |
-| --- | --- |
+| :-: | :-: |
 | ![Title screen](docs/screenshots/title.png) | ![Formation](docs/screenshots/formation.png) |
 | Title screen with the BEST 5 board | Formation assembled |
 | ![Dive attack](docs/screenshots/dive.png) | ![Tractor beam capture](docs/screenshots/capture.png) |
@@ -187,7 +214,7 @@ How this project compares to every other open-source Galaga on GitHub — includ
 
 ## License
 
-The code in this repository is MIT licensed - see [LICENSE](LICENSE).
+The code in this repository is MIT licensed — see [LICENSE](LICENSE).
 
 Phaser 3, vendored in `lib/`, ships under its own MIT license and its own copyright.
 
