@@ -113,7 +113,7 @@ export class ServiceScene extends Phaser.Scene {
       this,
       SCREEN.width / 2,
       190 + this.rows.length * 52 + 60,
-      'UP/DOWN select   LEFT/RIGHT change   F2 or EXIT to leave',
+      'UP/DOWN SELECT   L/R CHANGE   F2 EXIT',
       { tint: 0x667799 },
     ).setOrigin(0.5);
 

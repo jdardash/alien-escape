@@ -10,6 +10,13 @@ import {
 } from '../systems/persistence.js';
 import { applyCabinet } from '../art/crt.js';
 import { arcadeText, installArcadeFont } from '../art/font.js';
+import {
+  STARFIELD_SCROLL,
+  advanceStarfield,
+  createStarfield,
+  setStarfieldScroll,
+  visibleStars,
+} from '../systems/starfield.js';
 
 /**
  * Results screen, and the board.
@@ -70,7 +77,12 @@ export class GameOverScene extends Phaser.Scene {
   }
 
   create() {
-    this.add.rectangle(0, 0, SCREEN.width, SCREEN.height, 0x000000).setOrigin(0);
+    // The cabinet never turns the sky off: the results and the name entry
+    // play over the same twinkling field the game did. Title-speed drift,
+    // drawn first so every letter lands on top of it.
+    this.starfield = setStarfieldScroll(createStarfield(), STARFIELD_SCROLL.title);
+    this.starLayer = this.add.graphics();
+
     applyCabinet(this, SCREEN);
     installArcadeFont(this);
 
@@ -93,6 +105,15 @@ export class GameOverScene extends Phaser.Scene {
 
     this.drawResults();
     this.nextNameEntry();
+  }
+
+  update(_time, delta) {
+    this.starfield = advanceStarfield(this.starfield, delta);
+    this.starLayer.clear();
+    for (const star of visibleStars(this.starfield, SCREEN)) {
+      this.starLayer.fillStyle(star.color, 1);
+      this.starLayer.fillRect(star.x, star.y, 2, 2);
+    }
   }
 
   /**
@@ -194,7 +215,7 @@ export class GameOverScene extends Phaser.Scene {
         { tint: 0x8899bb },
       ).setOrigin(0.5),
 
-      arcadeText(this, SCREEN.width / 2, 610, 'W / S  letter      A / D  slot      SPACE  lock in', {
+      arcadeText(this, SCREEN.width / 2, 610, 'W/S LETTER   A/D SLOT   SPACE LOCK IN', {
         tint: 0x667799,
       }).setOrigin(0.5),
     ];

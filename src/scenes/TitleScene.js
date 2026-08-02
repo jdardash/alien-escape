@@ -192,7 +192,7 @@ export class TitleScene extends Phaser.Scene {
 
   rankLabel() {
     const suffix = this.rank === 0 ? 'factory' : 'harder';
-    return `RANK ${RANK_NAMES[this.rank]} (${suffix})    R to change    F2 service`;
+    return `RANK ${RANK_NAMES[this.rank]} (${suffix})   R: change   F2: service`;
   }
 
   /** Hand the screen to the operator. */
@@ -238,7 +238,7 @@ export class TitleScene extends Phaser.Scene {
       this,
       SCREEN.width / 2,
       SCREEN.height - 74,
-      `1 PLAYER: SPACE or 1      2 PLAYERS: 2${coined ? '      COIN: C' : ''}`,
+      `1P: SPACE or 1    2P: 2${coined ? '    COIN: C' : ''}`,
       { tint: 0x8899bb },
     )
       .setOrigin(0.5)
@@ -438,7 +438,7 @@ export class TitleScene extends Phaser.Scene {
       this.text(SCREEN.width / 2 - 170, y, line, { font: '18px monospace', fill: '#ffffff' }, 0);
     });
 
-    this.text(SCREEN.width / 2, 590, 'a tribute. not affiliated with Bandai Namco.', {
+    this.text(SCREEN.width / 2, 590, 'a tribute, unaffiliated with Bandai Namco', {
       font: '12px monospace',
       fill: '#556677',
     });
