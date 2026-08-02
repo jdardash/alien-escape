@@ -46,7 +46,7 @@ describe('difficulty ramp', () => {
 
   it('never lets the dive interval reach zero', () => {
     for (let stage = 1; stage <= 200; stage += 1) {
-      expect(stageDifficulty(stage).diveIntervalMs).toBeGreaterThanOrEqual(900);
+      expect(stageDifficulty(stage).diveIntervalMs).toBeGreaterThanOrEqual(600);
     }
   });
 
@@ -66,8 +66,10 @@ describe('difficulty ramp', () => {
     }
   });
 
-  it('plateaus rather than ramping forever', () => {
-    expect(stageDifficulty(16)).toEqual(stageDifficulty(50));
+  it('replays the last table row rather than ramping forever', () => {
+    // The table holds 26 stage rows; everything past them plays row 26.
+    expect(stageDifficulty(26)).toEqual(stageDifficulty(50));
+    expect(stageDifficulty(26)).toEqual(stageDifficulty(255));
   });
 
   it('never regresses in difficulty as the stage rises', () => {
@@ -404,10 +406,10 @@ describe('the stage counter rolling over', () => {
  * The operator's difficulty rank.
  *
  * The ROM holds a 4-rank by 26-stage table of bombing, capture and attack
- * parameters, selected by a DIP switch. This build keeps one smooth curve and
- * moves the player along it by rank, which is an approximation -- what these
- * pin is that the rank is real, that it is monotonic, and that rank A is
- * exactly what the game was before the dimension existed.
+ * parameters, selected by a DIP switch, and since pass 5 so does this build:
+ * `difficulty.js` holds the table and `stageDifficulty` reads it. What these
+ * pin is that the rank is real, that it is monotonic, and that rank A is the
+ * factory machine.
  */
 describe('the difficulty rank', () => {
   it('defaults to the factory rank when nobody asks for one', () => {

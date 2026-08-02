@@ -8,7 +8,7 @@
  * them can stay aggressive.
  */
 
-import { CHALLENGING_PATTERN_COUNT } from './paths.js';
+import { CHALLENGING_PATTERN_COUNT, diveVectorFor } from './paths.js';
 import { ENTRANCE_PATTERN_COUNT, EnemyType, FORMATION_SIZE } from './formation.js';
 import {
   CARAVAN_ROW_COUNT,
@@ -21,18 +21,27 @@ import {
   combatStageIndex,
   normalizeRank,
 } from './caravans.js';
+import {
+  DIFFICULTY_STAGE_ROWS,
+  difficultyRow,
+  difficultyRowIndex,
+  usesReloadVectors,
+} from './difficulty.js';
 
 export {
   CHALLENGING_PATTERN_COUNT,
   ENTRANCE_PATTERN_COUNT,
   CARAVAN_ROW_COUNT,
   COMBAT_STAGE_ROWS,
+  DIFFICULTY_STAGE_ROWS,
   DifficultyRank,
   RANK_COUNT,
   RANK_NAMES,
   caravanFor,
   combatStageIndex,
+  difficultyRow,
   normalizeRank,
+  usesReloadVectors,
 };
 
 /** Stage 3, then 7, 11, 15, and so on. */
@@ -72,8 +81,9 @@ export function nextStage(stage) {
  * from round 2 onward, which is what makes the opening screen a gentle
  * introduction rather than a scramble.
  */
-export function enemiesFireDuringEntry(stage) {
-  return stage >= 2 && !isChallengingStage(stage);
+export function enemiesFireDuringEntry(stage, rank = DifficultyRank.A) {
+  if (isChallengingStage(stage)) return false;
+  return difficultyRow(stage, rank).entryBombsEnabled;
 }
 
 /**
@@ -87,13 +97,18 @@ export function enemiesFireDuringEntry(stage) {
  * still -- and it is a property of the operator's difficulty setting rather
  * than of the game, which is why the two hard ranks take it away.
  *
+ * Read straight off the row's enable flags in `difficulty.js`, which is where
+ * the arcade keeps it: `FLAG_BOMBS` is zero on row 0 at ranks A and B and set
+ * everywhere else.
+ *
  * `enemiesFireDuringEntry` remains the narrower rule of the two -- whether a
- * ship still flying into formation may bomb -- and it holds to stage 2 at every
- * rank, so even the hardest setting lets the opening wave assemble unopposed.
+ * ship still flying into formation may bomb -- and its flag is off on row 0 at
+ * every rank, so even the hardest setting lets the opening wave assemble
+ * unopposed.
  */
 export function enemiesBomb(stage, rank = DifficultyRank.A) {
   if (isChallengingStage(stage)) return false;
-  return stage >= 2 || normalizeRank(rank) >= DifficultyRank.C;
+  return difficultyRow(stage, rank).bombsEnabled;
 }
 
 /**
@@ -128,7 +143,8 @@ export function captureMinEnemies(rank = DifficultyRank.A) {
  * a timer to decide *when* to try; this decides whether trying is legal at all.
  */
 export function captureAllowed(stage, enemiesRemaining, rank = DifficultyRank.A) {
-  if (stage < 2 || isChallengingStage(stage)) return false;
+  if (isChallengingStage(stage)) return false;
+  if (!difficultyRow(stage, rank).captureEnabled) return false;
   return enemiesRemaining > captureMinEnemies(rank);
 }
 
@@ -160,41 +176,19 @@ export function entrancePatternFor(stage, rank = DifficultyRank.A) {
 }
 
 /**
- * Where the difficulty ramp stops climbing.
- *
- * Galaga stops getting harder somewhere around the high teens. Without a
- * plateau the dive interval would eventually reach zero and the game would be
- * unplayable rather than difficult.
- */
-const DIFFICULTY_PLATEAU = 16;
-
-/**
- * How many stages of ramp one rank of the DIP switch is worth.
- *
- * The arcade does not scale a curve, it holds a separate 26-stage row of
- * parameters per rank. This build keeps one smooth curve and moves the player
- * along it, which is deliberately an approximation and is the one part of the
- * difficulty model that is not the ROM's: three stages a rank puts a rank-D
- * stage 1 at roughly the pressure of a rank-A stage 10, which is the right
- * order of magnitude for a setting an operator uses to shorten games.
- */
-const RANK_STAGE_ADVANCE = 3;
-
-/**
- * How often an attacker that is allowed to bomb actually does.
- *
- * Lives here rather than in `config.js` because it is a difficulty parameter
- * and the whole point of the rank dimension is that difficulty parameters vary
- * with it. The rank-A value is the one the game was tuned at.
- */
-const BASE_BOMB_CHANCE = 0.65;
-
-/**
  * Difficulty knobs for a stage, at a rank.
  *
- * Values ramp then plateau, and the rank shifts where on the ramp a given
- * stage sits as well as lifting the ceilings a little. Called without a rank
- * this is rank A, the factory setting, and returns exactly what it always did.
+ * Read out of the 4 x 26 x 10 table in `difficulty.js` -- the ROM's own
+ * structure -- and decoded twice over: the raw per-type launch counters and
+ * flags come through untouched for the attack scheduler, and the legacy
+ * knobs the scene still reads (`diveIntervalMs`, `maxSimultaneousDivers`,
+ * `bombChance`...) are derived from the same cells, so there is exactly one
+ * source of difficulty and the two views cannot drift.
+ *
+ * The dive speed multiplier comes from the per-stage flight vectors in
+ * `paths.js` -- the same table that picks which dive block a type flies --
+ * with a small rank term on top, because the vectors are a property of the
+ * stage and the rank is the operator's thumb on the scale.
  *
  * There is deliberately no rate of fire for the formation. In the arcade an
  * enemy only ever bombs while it is flying, on its way in or on an attack run;
@@ -203,14 +197,16 @@ const BASE_BOMB_CHANCE = 0.65;
  */
 export function stageDifficulty(stage, rank = DifficultyRank.A) {
   const level = normalizeRank(rank);
-  const ramp = Math.min(stage + level * RANK_STAGE_ADVANCE, DIFFICULTY_PLATEAU);
+  const row = difficultyRow(stage, level);
+  const { speed } = diveVectorFor(EnemyType.ZAKO, difficultyRowIndex(stage));
 
   return {
-    diveIntervalMs: Math.max(3000 - ramp * 160, 900 - level * 60),
-    maxSimultaneousDivers: Math.min(1 + Math.floor(ramp / 3) + level, 6 + level),
-    diveSpeed: Math.min(1 + ramp * 0.045 + level * 0.06, 1.7 + level * 0.1),
-    escortChance: Math.min(0.2 + ramp * 0.03 + level * 0.05, 0.75 + level * 0.05),
-    bombChance: Math.min(BASE_BOMB_CHANCE + level * 0.08, 0.95),
+    ...row,
+    diveIntervalMs: Math.round(row.launchMs.zako),
+    maxSimultaneousDivers: row.maxActiveBombers,
+    diveSpeed: Math.round((speed / 8.2 + level * 0.05) * 100) / 100,
+    escortChance: Math.min(0.2 + row.cloneAttackCount * 0.25 + level * 0.05, 0.9),
+    bombChance: Math.min(0.35 + row.continuousBombs * 0.15 + level * 0.08, 0.95),
   };
 }
 
