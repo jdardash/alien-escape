@@ -18,7 +18,7 @@ import {
 import { resolveStorage, loadScoreTable, loadRank, saveRank } from '../systems/persistence.js';
 import { RANK_COUNT, RANK_NAMES } from '../systems/stages.js';
 import { createShipTexture, shipTextureKey } from '../art/textures.js';
-import { applyShipArt, queueLocalArt, usingLocalArt } from '../art/localArt.js';
+import { applyShipArt, localArtFrames, queueLocalArt, usingLocalArt } from '../art/localArt.js';
 import { installSoundBank } from '../audio/soundBank.js';
 import { queueLocalAudio, usingLocalAudio } from '../audio/localAudio.js';
 import { EnemyType } from '../systems/formation.js';
@@ -309,7 +309,20 @@ export class TitleScene extends Phaser.Scene {
   // ----------------------------------------------------------------- panels
 
   drawTitle() {
-    this.text(SCREEN.width / 2, 150, 'ALIEN ESCAPE', { font: '52px monospace', fill: '#ffcc00' });
+    // The logo slot. A local checkout with a `logo` image gets it here, sized
+    // into the same box the wordmark occupies; everyone else gets the text.
+    const logo = localArtFrames('logo');
+    if (logo && this.textures.exists(logo[0])) {
+      const image = this.own(this.add.image(SCREEN.width / 2, 150, logo[0]));
+      const source = image.texture.getSourceImage();
+      const width = Math.min(500, SCREEN.width - 80);
+      image.setDisplaySize(width, (source.height / source.width) * width);
+    } else {
+      this.text(SCREEN.width / 2, 150, 'ALIEN ESCAPE', {
+        font: '52px monospace',
+        fill: '#ffcc00',
+      });
+    }
     this.text(SCREEN.width / 2, 202, 'a galaga tribute', {
       font: '18px monospace',
       fill: '#88aaff',

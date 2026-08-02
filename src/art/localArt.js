@@ -46,6 +46,17 @@ export const OVERRIDABLE_ART = [
   'explosionEnemy',
   'explosionPlayer',
   'beam',
+  // The six stage-flag denominations along the bottom of the HUD.
+  'flag1',
+  'flag5',
+  'flag10',
+  'flag20',
+  'flag30',
+  'flag50',
+  // Both projectiles, and the slot the title logo draws in.
+  'playerLaser',
+  'enemyLaser',
+  'logo',
 ];
 
 /**

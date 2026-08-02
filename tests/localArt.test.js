@@ -9,6 +9,7 @@ import {
   OVERRIDABLE_ART,
 } from '../src/art/localArt.js';
 import { SHIP_SPRITES, TRANSFORM_SPRITES } from '../src/art/pixelArt.js';
+import { FLAG_ART } from '../src/config.js';
 
 const full = {
   zako: 'zako.png',
@@ -22,7 +23,7 @@ const full = {
 describe('what can be overridden at all', () => {
   // This is the coverage pin: a new drawable added to the game without an
   // override name is exact-replication silently going out of reach.
-  it('covers every ship, every transform, both explosions and the beam', () => {
+  it('covers every ship, transform, explosion, flag, laser, the beam and the logo', () => {
     expect([...OVERRIDABLE_ART].sort()).toEqual(
       [
         ...Object.keys(SHIP_SPRITES),
@@ -30,8 +31,23 @@ describe('what can be overridden at all', () => {
         'explosionEnemy',
         'explosionPlayer',
         'beam',
+        'flag1',
+        'flag5',
+        'flag10',
+        'flag20',
+        'flag30',
+        'flag50',
+        'playerLaser',
+        'enemyLaser',
+        'logo',
       ].sort(),
     );
+  });
+
+  it('names a flag for every denomination the HUD can draw', () => {
+    for (const value of Object.keys(FLAG_ART.colors)) {
+      expect(OVERRIDABLE_ART).toContain(`flag${value}`);
+    }
   });
 
   it('has no duplicate names', () => {

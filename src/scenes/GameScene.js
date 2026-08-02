@@ -25,9 +25,11 @@ import {
   SHIP_ART,
   SHIP_DRAWN_PX,
   SPRITE_SCALE,
+  SPRITE_SOURCE_PX,
   CHALLENGING,
   TRANSFORM,
   ANIMATION,
+  FLAG_ART,
 } from '../config.js';
 import {
   flapFrameAt,
@@ -2043,12 +2045,24 @@ export class GameScene extends Phaser.Scene {
     if (!attacking) this.sfx.enemyDive.stop();
   }
 
+  /**
+   * The texture and drawn box for a projectile, local rip or shipped image.
+   *
+   * A local projectile is sized by display to exactly the box the shipped
+   * image's scale produces, so hitboxes and read distance stay identical.
+   */
+  projectileArt(localName, shippedKey, scale) {
+    const local = localArtFrames(localName);
+    const key = local && this.textures.exists(local[0]) ? local[0] : shippedKey;
+    return { key, drawnPx: SPRITE_SOURCE_PX * scale };
+  }
+
   fireEnemyBullet(enemy) {
     if (this.enemyBullets.countActive(true) >= DIVE.maxBombs) return;
 
-    const bullet = this.enemyBullets
-      .create(enemy.x, enemy.y + 18, 'laser')
-      .setScale(SPRITE_SCALE.laser);
+    const art = this.projectileArt('enemyLaser', 'laser', SPRITE_SCALE.laser);
+    const bullet = this.enemyBullets.create(enemy.x, enemy.y + 18, art.key);
+    bullet.setDisplaySize(art.drawnPx, art.drawnPx);
     bullet.body.setAllowGravity(false);
 
     this.sfx.enemyFire.play({ volume: 0.2 });
@@ -2137,9 +2151,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   spawnBullet(x) {
-    const bullet = this.bullets
-      .create(x, this.player.y - 26, 'bullet')
-      .setScale(SPRITE_SCALE.bullet);
+    const art = this.projectileArt('playerLaser', 'bullet', SPRITE_SCALE.bullet);
+    const bullet = this.bullets.create(x, this.player.y - 26, art.key);
+    bullet.setDisplaySize(art.drawnPx, art.drawnPx);
     bullet.body.setAllowGravity(false);
     bullet.setVelocityY(-PLAYER.bulletSpeed);
   }
@@ -2314,12 +2328,16 @@ export class GameScene extends Phaser.Scene {
     let x = SCREEN.width - 12;
     for (const flag of stageFlags(this.stage)) {
       for (let i = 0; i < flag.count; i += 1) {
-        this.flagIcons.push(
-          this.add
-            .image(x, SCREEN.height - 14, flagTextureKey(flag.value))
-            .setOrigin(1, 1)
-            .setDepth(20),
-        );
+        // A ripped flag, when the local directory has one, drawn into
+        // exactly the box the generated flag occupies.
+        const local = localArtFrames(`flag${flag.value}`);
+        const key =
+          local && this.textures.exists(local[0]) ? local[0] : flagTextureKey(flag.value);
+        const icon = this.add.image(x, SCREEN.height - 14, key).setOrigin(1, 1).setDepth(20);
+        if (key !== flagTextureKey(flag.value)) {
+          icon.setDisplaySize(FLAG_DRAWN_WIDTH, FLAG_ART.height * FLAG_ART.pixelSize);
+        }
+        this.flagIcons.push(icon);
         // Ones are drawn shoulder to shoulder, as the arcade does; the larger
         // denominations get a little air so the groups stay countable.
         x -= flag.value === 1 ? FLAG_DRAWN_WIDTH + 2 : FLAG_DRAWN_WIDTH + 6;
