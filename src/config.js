@@ -39,27 +39,9 @@ export const SCREEN = { width: 672, height: 864 };
  */
 export const SPRITE_SOURCE_PX = 128;
 
-/**
- * How far the background tile is blown up when drawn.
- *
- * The starfield is authored 512 x 2048 rather than at its drawn size because a
- * TileSprite whose texture is not a power of two makes Phaser allocate a padded
- * one behind it: at the previous 750 x 3000 that was a 1024 x 4096 texture,
- * 16 MB, for every TileSprite in the game. 512 x 2048 holds the original's 1:4
- * aspect exactly, so scaling the tile by 750/512 puts the starfield back at the
- * size it always drew at, from a quarter of the memory and none of the padding.
- */
-export const BACKGROUND_TILE_SCALE = 750 / 512;
-
-/**
- * How far the starfield drifts up each frame, in screen pixels.
- *
- * `tilePositionY` is measured in texture pixels rather than screen ones, and
- * the tile is now drawn `BACKGROUND_TILE_SCALE` times larger than it is stored,
- * so a scene scrolling by this has to divide by that scale to move the
- * starfield the distance it always moved.
- */
-export const BACKGROUND_SCROLL_PX = { game: 0.6, title: 0.4 };
+// The starfield is no longer a scrolling PNG tile: it is generated and
+// scrolled by `src/systems/starfield.js`, the 63-star hardware field, and its
+// speeds live there as `STARFIELD_SCROLL`.
 
 /**
  * The pixel art, and how big each use of it is drawn.

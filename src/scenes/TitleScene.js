@@ -1,4 +1,11 @@
-import { BACKGROUND_SCROLL_PX, BACKGROUND_TILE_SCALE, SCREEN, SHIP_ART } from '../config.js';
+import { SCREEN, SHIP_ART } from '../config.js';
+import {
+  STARFIELD_SCROLL,
+  advanceStarfield,
+  createStarfield,
+  setStarfieldScroll,
+  visibleStars,
+} from '../systems/starfield.js';
 import { resolveStorage, loadScoreTable, loadRank, saveRank } from '../systems/persistence.js';
 import { RANK_COUNT, RANK_NAMES } from '../systems/stages.js';
 import { createShipTexture, shipTextureKey } from '../art/textures.js';
@@ -38,8 +45,6 @@ export class TitleScene extends Phaser.Scene {
   }
 
   preload() {
-    this.load.image('background', 'assets/images/background_tiled_vertical.png');
-
     // Probed here rather than in GameScene so the title ship is already the
     // local one if a local checkout has any; it is a no-op the second time.
     queueLocalArt(this);
@@ -65,10 +70,10 @@ export class TitleScene extends Phaser.Scene {
     // screen is wrong without it, not because anything is being charged.
     this.credits = 2;
 
-    this.background = this.add
-      .tileSprite(0, 0, SCREEN.width, SCREEN.height, 'background')
-      .setOrigin(0)
-      .setTileScale(BACKGROUND_TILE_SCALE);
+    // The 63-star hardware field, drifting at attract speed. Drawn a frame
+    // at a time into one Graphics object; see `src/systems/starfield.js`.
+    this.starfield = setStarfieldScroll(createStarfield(), STARFIELD_SCROLL.title);
+    this.starLayer = this.add.graphics();
 
     // The attract screen has the theme under it, as the cabinet does. It is
     // stopped rather than left running when the game starts, so the opening
@@ -430,7 +435,12 @@ export class TitleScene extends Phaser.Scene {
     this.time.delayedCall(600, () => this.scene.start('GameScene', { playerCount }));
   }
 
-  update() {
-    this.background.tilePositionY -= BACKGROUND_SCROLL_PX.title / BACKGROUND_TILE_SCALE;
+  update(_time, delta) {
+    this.starfield = advanceStarfield(this.starfield, delta);
+    this.starLayer.clear();
+    for (const star of visibleStars(this.starfield, SCREEN)) {
+      this.starLayer.fillStyle(star.color, 1);
+      this.starLayer.fillRect(star.x, star.y, 2, 2);
+    }
   }
 }
