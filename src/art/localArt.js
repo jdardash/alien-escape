@@ -57,6 +57,8 @@ export const OVERRIDABLE_ART = [
   'playerLaser',
   'enemyLaser',
   'logo',
+  // The whole character sheet, sixteen glyphs a row in `FONT_CHARS` order.
+  'font',
 ];
 
 /**

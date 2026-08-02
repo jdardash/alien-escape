@@ -40,6 +40,7 @@ describe('what can be overridden at all', () => {
         'playerLaser',
         'enemyLaser',
         'logo',
+        'font',
       ].sort(),
     );
   });
