@@ -29,6 +29,7 @@ import { loadRank, saveRank, resolveStorage } from '../systems/persistence.js';
 import { RANK_COUNT, RANK_NAMES } from '../systems/stages.js';
 import { loadSettings, saveSettings, stepVolume } from '../systems/settings.js';
 import { addScanlines } from '../art/crt.js';
+import { arcadeText, installArcadeFont } from '../art/font.js';
 
 const COINAGE_LABELS = {
   [CoinageMode.FREE_PLAY]: 'FREE PLAY',
@@ -74,16 +75,19 @@ export class ServiceScene extends Phaser.Scene {
     this.sound.volume = this.settings.masterVolume;
     this.scanlineOverlay = this.settings.scanlines ? addScanlines(this, SCREEN) : null;
 
-    this.add
-      .text(SCREEN.width / 2, 60, 'SERVICE MODE', { font: '28px monospace', fill: '#ff4444' })
-      .setOrigin(0.5);
+    installArcadeFont(this);
+
+    arcadeText(this, SCREEN.width / 2, 60, 'SERVICE MODE', {
+      tint: 0xff4444,
+      scale: 1.5,
+    }).setOrigin(0.5);
 
     // The self-test lines. There is no RAM or ROM to test, but the screen is
     // wrong without them, and "OK" is the truth: if this scene is drawing,
     // the machine works.
-    this.add
-      .text(SCREEN.width / 2, 110, 'RAM OK        ROM OK', { font: '14px monospace', fill: '#44ff88' })
-      .setOrigin(0.5);
+    arcadeText(this, SCREEN.width / 2, 110, 'RAM OK        ROM OK', { tint: 0x44ff88 }).setOrigin(
+      0.5,
+    );
 
     this.rows = [
       { label: 'FIGHTERS', value: () => String(this.dips.lives), change: (d) => this.changeLives(d) },
@@ -100,24 +104,18 @@ export class ServiceScene extends Phaser.Scene {
 
     this.rowTexts = this.rows.map((row, index) => {
       const y = 190 + index * 52;
-      const label = this.add.text(SCREEN.width * 0.2, y, row.label, {
-        font: '16px monospace',
-        fill: '#ffffff',
-      });
-      const value = this.add.text(SCREEN.width * 0.62, y, row.value(), {
-        font: '16px monospace',
-        fill: '#ffcc00',
-      });
+      const label = arcadeText(this, SCREEN.width * 0.2, y, row.label);
+      const value = arcadeText(this, SCREEN.width * 0.62, y, row.value(), { tint: 0xffcc00 });
       return { label, value };
     });
 
-    this.add
-      .text(SCREEN.width / 2, 190 + this.rows.length * 52 + 60,
-        'UP/DOWN select   LEFT/RIGHT change   F2 or EXIT to leave', {
-          font: '13px monospace',
-          fill: '#667799',
-        })
-      .setOrigin(0.5);
+    arcadeText(
+      this,
+      SCREEN.width / 2,
+      190 + this.rows.length * 52 + 60,
+      'UP/DOWN select   LEFT/RIGHT change   F2 or EXIT to leave',
+      { tint: 0x667799 },
+    ).setOrigin(0.5);
 
     this.input.keyboard.on('keydown-UP', () => this.moveCursor(-1));
     this.input.keyboard.on('keydown-DOWN', () => this.moveCursor(1));
@@ -223,7 +221,7 @@ export class ServiceScene extends Phaser.Scene {
   redraw() {
     this.rows.forEach((row, index) => {
       const selected = index === this.cursor;
-      this.rowTexts[index].label.setFill(selected ? '#ffcc00' : '#ffffff');
+      this.rowTexts[index].label.setTint(selected ? 0xffcc00 : 0xffffff);
       this.rowTexts[index].label.setText(`${selected ? '> ' : '  '}${row.label}`);
       this.rowTexts[index].value.setText(row.value());
     });

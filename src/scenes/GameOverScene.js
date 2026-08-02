@@ -9,6 +9,7 @@ import {
   recordScore,
 } from '../systems/persistence.js';
 import { applyCabinet } from '../art/crt.js';
+import { arcadeText, installArcadeFont } from '../art/font.js';
 
 /**
  * Results screen, and the board.
@@ -71,6 +72,7 @@ export class GameOverScene extends Phaser.Scene {
   create() {
     this.add.rectangle(0, 0, SCREEN.width, SCREEN.height, 0x000000).setOrigin(0);
     applyCabinet(this, SCREEN);
+    installArcadeFont(this);
 
     // The cabinet plays a different tune for taking first place than for taking
     // any other place on the board, and a third for not making it at all. With
@@ -79,20 +81,14 @@ export class GameOverScene extends Phaser.Scene {
     if (best === 0) this.sound.play('highScoreEntry', { volume: 0.5 });
     else this.sound.play('gameOverTune', { volume: 0.5 });
 
-    this.add
-      .text(SCREEN.width / 2, 120, 'GAME OVER', {
-        font: '46px monospace',
-        fill: '#ff4444',
-      })
-      .setOrigin(0.5);
+    arcadeText(this, SCREEN.width / 2, 120, 'GAME OVER', { tint: 0xff4444, scale: 3 }).setOrigin(
+      0.5,
+    );
 
     if (this.scoreDisqualified) {
-      this.add
-        .text(SCREEN.width / 2, 160, 'NO FIRE - SCORE NOT RANKED', {
-          font: '15px monospace',
-          fill: '#cc8844',
-        })
-        .setOrigin(0.5);
+      arcadeText(this, SCREEN.width / 2, 160, 'NO FIRE - SCORE NOT RANKED', {
+        tint: 0xcc8844,
+      }).setOrigin(0.5);
     }
 
     this.drawResults();
@@ -110,21 +106,16 @@ export class GameOverScene extends Phaser.Scene {
     const labels = ['SCORE', 'STAGE REACHED', 'SHOTS FIRED', 'HITS', 'HIT-MISS RATIO'];
 
     labels.forEach((label, index) => {
-      this.add
-        .text(SCREEN.width / 2 - 190, 210 + index * 34, label, {
-          font: '16px monospace',
-          fill: '#8899bb',
-        })
-        .setOrigin(0, 0.5);
+      arcadeText(this, SCREEN.width / 2 - 190, 210 + index * 34, label, {
+        tint: 0x8899bb,
+      }).setOrigin(0, 0.5);
     });
 
     this.results.forEach((result, column) => {
       const x = this.twoPlayer ? SCREEN.width / 2 + 45 + column * 145 : SCREEN.width / 2 + 190;
 
       if (this.twoPlayer) {
-        this.add
-          .text(x, 176, `${result.index + 1}UP`, { font: '15px monospace', fill: '#ff4444' })
-          .setOrigin(1, 0.5);
+        arcadeText(this, x, 176, `${result.index + 1}UP`, { tint: 0xff4444 }).setOrigin(1, 0.5);
       }
 
       const values = [
@@ -136,9 +127,7 @@ export class GameOverScene extends Phaser.Scene {
       ];
 
       values.forEach((value, index) => {
-        this.add
-          .text(x, 210 + index * 34, value, { font: '16px monospace', fill: '#ffffff' })
-          .setOrigin(1, 0.5);
+        arcadeText(this, x, 210 + index * 34, value).setOrigin(1, 0.5);
       });
     });
   }
@@ -190,42 +179,28 @@ export class GameOverScene extends Phaser.Scene {
     // Tracking only the letters, which an earlier revision did, left the
     // headings and the key hints on screen underneath the board.
     this.panel = [
-      this.add
-        .text(SCREEN.width / 2, 430, `YOU PLACED ${this.entry.rank + 1} OF 5`, {
-          font: '20px monospace',
-          fill: '#ffcc00',
-        })
-        .setOrigin(0.5),
+      arcadeText(this, SCREEN.width / 2, 430, `YOU PLACED ${this.entry.rank + 1} OF 5`, {
+        tint: 0xffcc00,
+        scale: 1.5,
+      }).setOrigin(0.5),
 
-      this.add
-        .text(
-          SCREEN.width / 2,
-          466,
-          this.twoPlayer
-            ? `PLAYER ${this.entry.index + 1} -- ENTER YOUR INITIALS`
-            : 'ENTER YOUR INITIALS',
-          {
-            font: '15px monospace',
-            fill: '#8899bb',
-          },
-        )
-        .setOrigin(0.5),
+      arcadeText(
+        this,
+        SCREEN.width / 2,
+        466,
+        this.twoPlayer
+          ? `PLAYER ${this.entry.index + 1} -- ENTER YOUR INITIALS`
+          : 'ENTER YOUR INITIALS',
+        { tint: 0x8899bb },
+      ).setOrigin(0.5),
 
-      this.add
-        .text(SCREEN.width / 2, 610, 'W / S  letter      A / D  slot      SPACE  lock in', {
-          font: '14px monospace',
-          fill: '#667799',
-        })
-        .setOrigin(0.5),
+      arcadeText(this, SCREEN.width / 2, 610, 'W / S  letter      A / D  slot      SPACE  lock in', {
+        tint: 0x667799,
+      }).setOrigin(0.5),
     ];
 
     this.letters = this.initials.map((_letter, index) =>
-      this.add
-        .text(SCREEN.width / 2 + (index - 1) * 52, 528, '', {
-          font: '42px monospace',
-          fill: '#ffffff',
-        })
-        .setOrigin(0.5),
+      arcadeText(this, SCREEN.width / 2 + (index - 1) * 52, 528, '', { scale: 2.5 }).setOrigin(0.5),
     );
 
     this.cursor = this.add
@@ -311,7 +286,7 @@ export class GameOverScene extends Phaser.Scene {
   refreshNameEntry() {
     this.letters.forEach((letter, index) => {
       letter.setText(NAME_ALPHABET[this.initials[index]]);
-      letter.setColor(index === this.slot ? '#ffcc00' : '#ffffff');
+      letter.setTint(index === this.slot ? 0xffcc00 : 0xffffff);
     });
 
     this.cursor.x = SCREEN.width / 2 + (this.slot - 1) * 52;
@@ -328,9 +303,9 @@ export class GameOverScene extends Phaser.Scene {
    * the moment a player confirmed their initials.
    */
   showBoard() {
-    this.add
-      .text(SCREEN.width / 2, 430, 'BEST 5', { font: '20px monospace', fill: '#ff4444' })
-      .setOrigin(0.5);
+    arcadeText(this, SCREEN.width / 2, 430, 'BEST 5', { tint: 0xff4444, scale: 1.5 }).setOrigin(
+      0.5,
+    );
 
     // Rows this game just wrote, matched by what was written rather than by the
     // rank worked out earlier: with two players the second name goes in against
@@ -346,30 +321,19 @@ export class GameOverScene extends Phaser.Scene {
       // Removed once matched, so two players who took the same initials with
       // the same score light up one row each rather than both lighting up two.
       if (mine !== -1) claimed.splice(mine, 1);
-      const fill = mine !== -1 ? '#ffcc00' : '#ffffff';
+      const tint = mine !== -1 ? 0xffcc00 : 0xffffff;
 
-      this.add
-        .text(SCREEN.width / 2 - 150, y, `${index + 1}`, {
-          font: '17px monospace',
-          fill: '#667799',
-        })
-        .setOrigin(0, 0.5);
-
-      this.add
-        .text(SCREEN.width / 2 - 60, y, entry.name, { font: '17px monospace', fill })
-        .setOrigin(0, 0.5);
-
-      this.add
-        .text(SCREEN.width / 2 + 150, y, String(entry.score), { font: '17px monospace', fill })
-        .setOrigin(1, 0.5);
+      arcadeText(this, SCREEN.width / 2 - 150, y, `${index + 1}`, { tint: 0x667799 }).setOrigin(
+        0,
+        0.5,
+      );
+      arcadeText(this, SCREEN.width / 2 - 60, y, entry.name, { tint }).setOrigin(0, 0.5);
+      arcadeText(this, SCREEN.width / 2 + 150, y, String(entry.score), { tint }).setOrigin(1, 0.5);
     });
 
-    const prompt = this.add
-      .text(SCREEN.width / 2, 700, 'SPACE to play again    T for title', {
-        font: '16px monospace',
-        fill: '#aaaaaa',
-      })
-      .setOrigin(0.5);
+    const prompt = arcadeText(this, SCREEN.width / 2, 700, 'SPACE to play again    T for title', {
+      tint: 0xaaaaaa,
+    }).setOrigin(0.5);
 
     this.tweens.add({ targets: prompt, alpha: 0.3, duration: 900, yoyo: true, repeat: -1 });
 

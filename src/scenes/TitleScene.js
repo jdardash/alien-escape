@@ -19,6 +19,7 @@ import { resolveStorage, loadScoreTable, loadRank, saveRank } from '../systems/p
 import { RANK_COUNT, RANK_NAMES } from '../systems/stages.js';
 import { createShipTexture, shipTextureKey } from '../art/textures.js';
 import { applyShipArt, localArtFrames, queueLocalArt, usingLocalArt } from '../art/localArt.js';
+import { arcadeText, installArcadeFont } from '../art/font.js';
 import { installSoundBank } from '../audio/soundBank.js';
 import { queueLocalAudio, usingLocalAudio } from '../audio/localAudio.js';
 import { EnemyType } from '../systems/formation.js';
@@ -80,6 +81,10 @@ export class TitleScene extends Phaser.Scene {
     // The volume pot and the monitor, applied before the theme starts so the
     // attract loop plays at the volume the operator set.
     applyCabinet(this, SCREEN);
+
+    // The 8x8 character sheet everything on this screen is printed in. A
+    // no-op if GameScene got there first.
+    installArcadeFont(this);
 
     // The 252-star hardware field, FROZEN: in attract the ROM writes star
     // control 7, which the speed table maps to a dead stop (task_man.s:375),
@@ -216,18 +221,11 @@ export class TitleScene extends Phaser.Scene {
    * always shows, and the prompt to start.
    */
   drawChrome() {
-    this.creditText = this.add
-      .text(20, SCREEN.height - 30, this.creditLabel(), {
-        font: '16px monospace',
-        fill: '#ffffff',
-      })
-      .setDepth(10);
+    this.creditText = arcadeText(this, 20, SCREEN.height - 30, this.creditLabel()).setDepth(10);
 
-    const prompt = this.add
-      .text(SCREEN.width / 2, SCREEN.height - 100, 'PUSH START BUTTON', {
-        font: '18px monospace',
-        fill: '#ffcc00',
-      })
+    const prompt = arcadeText(this, SCREEN.width / 2, SCREEN.height - 100, 'PUSH START BUTTON', {
+      tint: 0xffcc00,
+    })
       .setOrigin(0.5)
       .setDepth(10);
 
@@ -236,24 +234,19 @@ export class TitleScene extends Phaser.Scene {
     // The two start buttons, and what they cost. On free play they always
     // work; on a coined machine the C key is the slot.
     const coined = this.dips.coinage !== CoinageMode.FREE_PLAY;
-    this.add
-      .text(
-        SCREEN.width / 2,
-        SCREEN.height - 74,
-        `1 PLAYER: SPACE or 1      2 PLAYERS: 2${coined ? '      COIN: C' : ''}`,
-        {
-          font: '14px monospace',
-          fill: '#8899bb',
-        },
-      )
+    arcadeText(
+      this,
+      SCREEN.width / 2,
+      SCREEN.height - 74,
+      `1 PLAYER: SPACE or 1      2 PLAYERS: 2${coined ? '      COIN: C' : ''}`,
+      { tint: 0x8899bb },
+    )
       .setOrigin(0.5)
       .setDepth(10);
 
-    this.rankText = this.add
-      .text(SCREEN.width / 2, SCREEN.height - 52, this.rankLabel(), {
-        font: '13px monospace',
-        fill: this.rank === 0 ? '#667799' : '#cc8844',
-      })
+    this.rankText = arcadeText(this, SCREEN.width / 2, SCREEN.height - 52, this.rankLabel(), {
+      tint: this.rank === 0 ? 0x667799 : 0xcc8844,
+    })
       .setOrigin(0.5)
       .setDepth(10);
 
@@ -265,11 +258,9 @@ export class TitleScene extends Phaser.Scene {
     const local = [usingLocalArt() && 'artwork', usingLocalAudio() && 'audio'].filter(Boolean);
 
     if (local.length > 0) {
-      this.add
-        .text(SCREEN.width - 20, SCREEN.height - 30, `local ${local.join(' + ')}`, {
-          font: '12px monospace',
-          fill: '#556677',
-        })
+      arcadeText(this, SCREEN.width - 20, SCREEN.height - 30, `local ${local.join(' + ')}`, {
+        tint: 0x556677,
+      })
         .setOrigin(1, 0)
         .setDepth(10);
     }
@@ -297,8 +288,22 @@ export class TitleScene extends Phaser.Scene {
     return object;
   }
 
-  text(x, y, content, style, origin = 0.5) {
-    return this.own(this.add.text(x, y, content, style).setOrigin(origin, 0.5));
+  /**
+   * Panel text in the arcade font.
+   *
+   * Call sites still speak the old Text style dialect -- a `font` size and a
+   * `fill` -- and this translates: the size buckets to a whole glyph-pixel
+   * scale, the fill becomes a tint. One translator here beats twenty edited
+   * call sites that would all have to agree on the mapping.
+   */
+  text(x, y, content, style = {}, origin = 0.5) {
+    const size = parseInt(style.font ?? '16', 10);
+    const scale = size <= 18 ? 1 : size <= 28 ? 1.5 : size <= 40 ? 2 : 3;
+    const tint = style.fill ? parseInt(style.fill.slice(1), 16) : 0xffffff;
+
+    return this.own(
+      arcadeText(this, x, y, content, { tint, scale }).setOrigin(origin, 0.5),
+    );
   }
 
   ship(x, y, name, pixelSize = SHIP_ART.pixelSize) {
@@ -342,13 +347,9 @@ export class TitleScene extends Phaser.Scene {
     ].join('\n');
 
     this.own(
-      this.add
-        .text(SCREEN.width / 2, 470, controls, {
-          font: '15px monospace',
-          fill: '#cccccc',
-          align: 'left',
-          lineSpacing: 6,
-        })
+      arcadeText(this, SCREEN.width / 2, 470, controls, { tint: 0xcccccc })
+        .setLeftAlign()
+        .setLineSpacing(6)
         .setOrigin(0.5),
     );
   }
