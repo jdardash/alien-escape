@@ -16,6 +16,7 @@ import {
   parsePixelArt,
   frameRows,
   frameCount,
+  EXPLOSION_SPRITES,
   TRANSFORM_SPRITES,
   FLAG_SPRITES,
   SHIP_SPRITES,
@@ -100,6 +101,26 @@ export function createTransformTextures(scene) {
   for (const [type, sprite] of Object.entries(TRANSFORM_SPRITES)) {
     for (let frame = 0; frame < frameCount(sprite); frame += 1) {
       createPixelTexture(scene, transformTextureKey(type, frame), sprite, TRANSFORM.pixelSize, frame);
+    }
+  }
+}
+
+/** Texture key for one frame of an explosion. */
+export function explosionTextureKey(kind, frame) {
+  return `explosion-${kind}-f${frame}`;
+}
+
+/**
+ * Build every frame of both explosions.
+ *
+ * Drawn at the ships' own pixel size: the enemy burst is a 16-grid like the
+ * ships and comes out at their 48px; the player's is a 32-grid and comes out
+ * at 96px, twice a ship, which is the arcade's own proportion for it.
+ */
+export function createExplosionTextures(scene) {
+  for (const [kind, sprite] of Object.entries(EXPLOSION_SPRITES)) {
+    for (let frame = 0; frame < frameCount(sprite); frame += 1) {
+      createPixelTexture(scene, explosionTextureKey(kind, frame), sprite, SHIP_ART.pixelSize, frame);
     }
   }
 }

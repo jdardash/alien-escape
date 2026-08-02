@@ -4,6 +4,8 @@ import {
   composeFlag,
   frameRows,
   frameCount,
+  mirrorQuad,
+  EXPLOSION_SPRITES,
   TRANSFORM_SPRITES,
   FLAG_SPRITES,
   SHIP_SPRITES,
@@ -247,6 +249,63 @@ describe('animation frames', () => {
     const flag = FLAG_SPRITES[1];
     expect(frameCount(flag)).toBe(1);
     expect(frameRows(flag)).toBe(flag.rows);
+  });
+});
+
+describe('explosion artwork', () => {
+  /** How far the furthest lit pixel sits from the frame's centre. */
+  function blastRadius(art) {
+    const cx = (art.width - 1) / 2;
+    const cy = (art.height - 1) / 2;
+    return Math.max(
+      ...art.pixels.map((pixel) => Math.hypot(pixel.x - cx, pixel.y - cy)),
+    );
+  }
+
+  const parsed = (kind) =>
+    EXPLOSION_SPRITES[kind].frames.map((rows) =>
+      parsePixelArt(rows, EXPLOSION_SPRITES[kind].palette),
+    );
+
+  it('plays the enemy burst over five frames and the player death over four', () => {
+    expect(frameCount(EXPLOSION_SPRITES.enemy)).toBe(5);
+    expect(frameCount(EXPLOSION_SPRITES.player)).toBe(4);
+  });
+
+  it('authors the enemy burst at 16x16 and the player death at 32x32', () => {
+    for (const art of parsed('enemy')) {
+      expect(art.width).toBe(16);
+      expect(art.height).toBe(16);
+    }
+    for (const art of parsed('player')) {
+      expect(art.width).toBe(32);
+      expect(art.height).toBe(32);
+    }
+  });
+
+  it('expands outward frame over frame, the way a blast reads', () => {
+    for (const kind of ['enemy', 'player']) {
+      const frames = parsed(kind);
+      for (let i = 0; i + 2 < frames.length; i += 1) {
+        expect(blastRadius(frames[i + 1])).toBeGreaterThanOrEqual(blastRadius(frames[i]));
+      }
+    }
+  });
+
+  it('ends on a sparse frame, a fade rather than a freeze', () => {
+    for (const kind of ['enemy', 'player']) {
+      const frames = parsed(kind);
+      const peak = Math.max(...frames.slice(0, -1).map((art) => art.pixels.length));
+      expect(frames[frames.length - 1].pixels.length).toBeLessThan(peak / 2);
+    }
+  });
+});
+
+describe('mirrorQuad', () => {
+  it('unfolds a quadrant into a grid symmetric about both axes', () => {
+    const full = mirrorQuad(['ab', '.c']);
+
+    expect(full).toEqual(['abba', '.cc.', '.cc.', 'abba']);
   });
 });
 

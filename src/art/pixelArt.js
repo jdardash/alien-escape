@@ -530,6 +530,216 @@ export const TRANSFORM_SPRITES = {
   flagship: FLAGSHIP,
 };
 
+/**
+ * Unfold one hand-authored quadrant into a grid symmetric about both axes.
+ *
+ * The player's death blast is four identical petals, so only its top-left
+ * sixteenth is drawn by hand and the rest is this fold. That is not a
+ * shortcut so much as the shape's own grammar -- a blast with a lopsided
+ * petal would read as a typo, and this makes one impossible.
+ */
+export function mirrorQuad(quad) {
+  const mirrored = quad.map((row) => row + [...row].reverse().join(''));
+  return [...mirrored, ...[...mirrored].reverse()];
+}
+
+/**
+ * The enemy burst: five frames of 16x16, a white core swallowing the ship,
+ * blooming through yellow into a pink shell that tears apart and drifts out.
+ *
+ * The cabinet plays its burst in about a third of a second and it reads as a
+ * pop rather than a fireball; the discipline here is that every frame's
+ * furthest pixel sits further out than the last, which `tests/pixelArt.test.js`
+ * measures as a growing blast radius.
+ */
+const ENEMY_BURST_FRAMES = [
+  [
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '.......ww.......',
+    '......wyyw......',
+    '......wyyw......',
+    '.......ww.......',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+  ],
+  [
+    '................',
+    '................',
+    '................',
+    '................',
+    '.......yy.......',
+    '.....yywwyy.....',
+    '....ywwwwwwy....',
+    '....ywwyywwy....',
+    '....ywwyywwy....',
+    '....ywwwwwwy....',
+    '.....yywwyy.....',
+    '.......yy.......',
+    '................',
+    '................',
+    '................',
+    '................',
+  ],
+  [
+    '................',
+    '................',
+    '....p......p....',
+    '...p.yyyyyy.p...',
+    '....yywwwwyy....',
+    '...yww....wwy...',
+    '..pyw......wyp..',
+    '..pyw......wyp..',
+    '..pyw......wyp..',
+    '..pyw......wyp..',
+    '...yww....wwy...',
+    '....yywwwwyy....',
+    '...p.yyyyyy.p...',
+    '....p......p....',
+    '................',
+    '................',
+  ],
+  [
+    'p......pp......p',
+    '.y............y.',
+    '..y..........y..',
+    '...p........p...',
+    '....y..yy..y....',
+    '................',
+    '.....y....y.....',
+    '.pp..........pp.',
+    '.pp..........pp.',
+    '.....y....y.....',
+    '................',
+    '....y..yy..y....',
+    '...p........p...',
+    '..y..........y..',
+    '.y............y.',
+    'p......pp......p',
+  ],
+  [
+    'p..............p',
+    '................',
+    '...p........p...',
+    '................',
+    '................',
+    '................',
+    '.p............p.',
+    '................',
+    '................',
+    '.p............p.',
+    '................',
+    '................',
+    '...p........p...',
+    '................',
+    '................',
+    'p..............p',
+  ],
+];
+
+/**
+ * The player's death: four frames of 32x32, twice the size of anything else
+ * on the board, because losing the fighter is the loudest thing the screen
+ * ever says. A red-cored flash, then a hollow shell with four arms reaching
+ * for the corners, then embers.
+ *
+ * Each frame is authored as its top-left quadrant and unfolded by
+ * `mirrorQuad`, so all four petals are one drawing.
+ */
+const PLAYER_BLAST_QUADS = [
+  [
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '..............yy',
+    '............yyww',
+    '...........ywwww',
+    '...........ywwww',
+  ],
+  [
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '..........yyyyyy',
+    '.........yywwwww',
+    '.........ywwwwww',
+    '........yywwwwww',
+    '........ywwwrrrr',
+    '........ywwwrrrr',
+    '........ywwrrrrr',
+  ],
+  [
+    'dd..............',
+    '.ddy............',
+    '..dyy...........',
+    '...dyyy.........',
+    '....dyyy........',
+    '......yyyy......',
+    '.......yyyyy....',
+    '........yywww...',
+    '.........ywww...',
+    '..........ywww..',
+    '..........yww...',
+    '...........yw...',
+    '...........yw...',
+    '............y...',
+    '............y...',
+    '................',
+  ],
+  [
+    'd...............',
+    '..d.............',
+    '....d...........',
+    '................',
+    '......y.........',
+    '................',
+    '........y.......',
+    '..........y.....',
+    '................',
+    '............d...',
+    '................',
+    '..............d.',
+    '................',
+    '................',
+    '................',
+    '................',
+  ],
+];
+
+export const EXPLOSION_SPRITES = {
+  enemy: {
+    frames: ENEMY_BURST_FRAMES,
+    palette: { w: 0xffffff, y: 0xffe060, p: 0xff60b0 },
+  },
+  player: {
+    frames: PLAYER_BLAST_QUADS.map(mirrorQuad),
+    palette: { w: 0xfff0e0, y: 0xffb040, r: 0xf04038, d: 0x803030 },
+  },
+};
+
 /** The frame every stage flag is drawn in, in authored pixels. */
 export const FLAG_FRAME = { width: 10, height: 12, bannerWidth: 8, bannerHeight: 4 };
 
