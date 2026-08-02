@@ -787,7 +787,13 @@ export class GameScene extends Phaser.Scene {
     this.clearBeam();
     this.clearTimers();
 
-    this.showBanner(this.challenging ? 'CHALLENGING STAGE' : `STAGE ${stage}`, 1800);
+    // STAGE n, then READY, then the wave -- the cabinet's own cadence, cut
+    // inside the same 1800ms the single banner used to hold, so nothing about
+    // when the formation actually arrives has moved.
+    this.showBanner(this.challenging ? 'CHALLENGING STAGE' : `STAGE ${stage}`, 1100);
+    this.time.delayedCall(1100, () => {
+      if (!this.isGameOver) this.showBanner('READY', 700);
+    });
     this.sfx[this.challenging ? 'challengeStart' : 'stageFlag'].play({ volume: 0.5 });
     this.refreshHud();
 
@@ -1546,13 +1552,15 @@ export class GameScene extends Phaser.Scene {
     if (enemy.transformSet) {
       const set = enemy.transformSet;
       const points = transformKillPoints(set.type, set.remaining);
+      const { x, y } = enemy;
       set.remaining -= 1;
       this.destroyEnemy(enemy, true);
 
       this.addScore(points);
-      // Only the set bonus is worth interrupting the screen for; 160 on its own
-      // is an ordinary kill and belongs in the score, not in a banner.
-      if (set.remaining === 0) this.showBanner(String(points), 1100);
+      // Only the set bonus is worth announcing; 160 on its own is an ordinary
+      // kill. The announcement is the cabinet's: the value, in blue, where
+      // the third ship died.
+      if (set.remaining === 0) this.spawnScorePopup(x, y, points);
       return;
     }
 
@@ -1572,12 +1580,19 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
-    this.addScore(
-      scoreFor(enemy.enemyType, {
-        diving: isDiving(enemy),
-        escorts: enemy.escortCount ?? 0,
-      }),
-    );
+    const points = scoreFor(enemy.enemyType, {
+      diving: isDiving(enemy),
+      escorts: enemy.escortCount ?? 0,
+    });
+    this.addScore(points);
+
+    // The cabinet's famous blue number: a Boss Galaga shot down mid-dive
+    // flashes what it paid -- 400, 800, 1600 with its escorts -- at the spot
+    // it died. Formation kills stay silent; the popup is the reward for the
+    // harder shot.
+    if (enemy.enemyType === EnemyType.BOSS && isDiving(enemy)) {
+      this.spawnScorePopup(enemy.x, enemy.y, points);
+    }
 
     // Galaga's rescue rule: the ship only comes back if its captor is shot
     // down on a dive. Read the mode before the sprite is destroyed, and let
@@ -1617,7 +1632,7 @@ export class GameScene extends Phaser.Scene {
     // so shooting it down is just self-defence and pays nothing.
     if (!this.captive.flight) {
       this.addScore(CAPTURED_FIGHTER_POINTS);
-      this.showBanner(String(CAPTURED_FIGHTER_POINTS), 1100);
+      this.spawnScorePopup(this.captive.x, this.captive.y, CAPTURED_FIGHTER_POINTS);
       if (this.captor) this.captor.captiveAttached = false;
       this.captureState = transition(this.captureState, CaptureEvent.CAPTIVE_DESTROYED);
     }
@@ -1797,6 +1812,9 @@ export class GameScene extends Phaser.Scene {
     this.player.enableBody(true, SCREEN.width / 2, PLAYER.y, true, true);
     this.player.setAngle(0);
     this.makeInvulnerable(PLAYER.invulnerableMs);
+
+    // The cabinet says READY over every fresh fighter, not only stage one.
+    this.showBanner('READY', 900);
   }
 
   makeInvulnerable(durationMs) {
@@ -2229,6 +2247,19 @@ export class GameScene extends Phaser.Scene {
   showBanner(text, durationMs) {
     this.bannerText.setText(text).setVisible(true);
     this.time.delayedCall(durationMs, () => this.bannerText.setVisible(false));
+  }
+
+  /**
+   * A point value printed where the points were earned, the cabinet's way.
+   *
+   * Small, blue, and short-lived: the arcade flashes 400/800/1600 at the spot
+   * a diving boss died and the bonus values where a transform trio finished,
+   * and the number is gone again inside a second. Purely visual -- the score
+   * was already added by the caller.
+   */
+  spawnScorePopup(x, y, value) {
+    const popup = arcadeText(this, x, y, String(value), { tint: 0x66ccff }).setOrigin(0.5).setDepth(25);
+    this.time.delayedCall(1000, () => popup.destroy());
   }
 
   refreshHud() {
