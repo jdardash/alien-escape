@@ -13,3 +13,7 @@ docs/superpowers/
 # and samples in here instead (sfx/ for the audio). They are Bandai Namco's and
 # must never be committed. See docs/local-art.md and docs/local-audio.md.
 assets/local/
+
+# Local reference mirrors of ROM research repos (not redistributed)
+reference/
+test-results/
