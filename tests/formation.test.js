@@ -13,6 +13,8 @@ import {
   slotWorldPosition,
   clampFormationCentre,
 } from '../src/systems/formation.js';
+import { CARAVAN_ROWS } from '../src/systems/caravans.js';
+import { FLY_IN_PATH_COUNT } from '../src/systems/paths.js';
 import { SCREEN, FORMATION, SHIP_DRAWN_PX } from '../src/config.js';
 
 describe('formation layout', () => {
@@ -78,85 +80,92 @@ describe('entry flights', () => {
   });
 
   it('gives every member a curve the path module actually has', () => {
-    for (let pattern = 0; pattern < ENTRANCE_PATTERN_COUNT; pattern += 1) {
-      for (const group of buildEntryGroups(pattern)) {
+    for (const caravan of CARAVAN_ROWS) {
+      for (const group of buildEntryGroups(caravan)) {
         for (const member of group.members) {
           expect(Number.isInteger(member.pathVariant)).toBe(true);
           expect(member.pathVariant).toBeGreaterThanOrEqual(0);
-          expect(member.pathVariant).toBeLessThan(4);
+          expect(member.pathVariant).toBeLessThan(FLY_IN_PATH_COUNT);
+          expect(typeof member.mirrored).toBe('boolean');
         }
       }
     }
   });
 
-  // The heart of it. A stage flies one entrance pattern from first flight to
-  // last; the version this replaced drew from a fixed five-entry list that
+  // The heart of it. A stage flies one caravan from first flight to last, and a
+  // flight has exactly two path bytes, so no flight can be flying more than two
+  // shapes. The version this replaced drew from a fixed five-entry list that
   // mixed top-corner sweeps and side loops inside a single wave, so no stage
-  // ever flew one of the arcade's three patterns cleanly.
-  it('draws every flight of a stage from that pattern own pair of curves', () => {
-    for (let pattern = 0; pattern < ENTRANCE_PATTERN_COUNT; pattern += 1) {
-      const used = new Set(
-        buildEntryGroups(pattern).flatMap((group) =>
-          group.members.map((member) => member.pathVariant),
-        ),
-      );
-      expect(used.size).toBe(2);
+  // ever flew one of the arcade's entrances cleanly.
+  it('draws every flight from its own two path bytes and no others', () => {
+    for (const caravan of CARAVAN_ROWS) {
+      for (const group of buildEntryGroups(caravan)) {
+        const used = new Set(
+          group.members.map((member) => `${member.pathVariant}:${member.mirrored}`),
+        );
+        expect(used.size).toBeLessThanOrEqual(2);
+      }
     }
   });
 
-  it('gives the three patterns three distinct choreographies', () => {
-    const signature = (pattern) =>
+  it('gives all thirteen caravans distinct choreography', () => {
+    const signature = (caravan) =>
       JSON.stringify(
-        buildEntryGroups(pattern).map((group) =>
-          group.members.map((member) => [member.pathVariant, member.step]),
+        buildEntryGroups(caravan).map((group) =>
+          group.members.map((member) => [member.pathVariant, member.mirrored, member.step]),
         ),
       );
 
-    const signatures = new Set([signature(0), signature(1), signature(2)]);
-    expect(signatures.size).toBe(3);
+    const signatures = CARAVAN_ROWS.map(signature);
+    expect(new Set(signatures).size).toBe(ENTRANCE_PATTERN_COUNT);
   });
 
-  // Sourced: the first pattern "is the only pattern where enemies will enter
-  // from both sides of the screen at the same time".
-  it('has exactly one pattern that enters from both sides at once', () => {
-    const bothSidesAtOnce = (pattern) =>
-      buildEntryGroups(pattern).some((group) =>
-        group.members.some((member) =>
-          group.members.some(
-            (other) => other.step === member.step && other.pathVariant !== member.pathVariant,
-          ),
-        ),
-      );
+  // Sourced twice: the arcade's stage-1 caravan launches its second member
+  // ungated and mirrored, and the strategy guides describe the entrance a
+  // player meets first as "the only pattern where enemies will enter from both
+  // sides of the screen at the same time... in short rows".
+  it('brings the stage-1 caravan in from both sides at once, in short rows', () => {
+    const groups = buildEntryGroups(CARAVAN_ROWS[ENTRANCE_PATTERN_BOTH_SIDES]);
+    const opening = groups[0];
 
-    const patterns = [0, 1, 2].filter(bothSidesAtOnce);
-    expect(patterns).toEqual([ENTRANCE_PATTERN_BOTH_SIDES]);
+    const pairs = opening.members.filter((member) =>
+      opening.members.some(
+        (other) => other !== member && other.step === member.step && other.mirrored !== member.mirrored,
+      ),
+    );
+
+    expect(pairs).toHaveLength(8);
+    // Four beats rather than eight: the flight is home in half the time.
+    expect(Math.max(...opening.members.map((m) => m.step))).toBe(3);
   });
 
-  it('sends the other two patterns in single file, one curve per flight', () => {
-    for (const pattern of [0, 1, 2].filter((p) => p !== ENTRANCE_PATTERN_BOTH_SIDES)) {
-      for (const group of buildEntryGroups(pattern)) {
-        const variants = new Set(group.members.map((member) => member.pathVariant));
+  it('sends a fully gated caravan in single file', () => {
+    // Row 1 is gated throughout, so every member waits its turn.
+    for (const group of buildEntryGroups(CARAVAN_ROWS[1])) {
+      expect(group.members.map((member) => member.step)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    }
+  });
+
+  it('never runs the launch order backwards, whatever the gating', () => {
+    for (const caravan of CARAVAN_ROWS) {
+      for (const group of buildEntryGroups(caravan)) {
         const steps = group.members.map((member) => member.step);
-
-        expect(variants.size).toBe(1);
-        expect(steps).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+        expect(steps[0]).toBe(0);
+        for (let i = 1; i < steps.length; i += 1) {
+          expect(steps[i]).toBeGreaterThanOrEqual(steps[i - 1]);
+          // A beat is never skipped: a gated member is the very next one.
+          expect(steps[i] - steps[i - 1]).toBeLessThanOrEqual(1);
+        }
       }
     }
   });
 
-  it('never sends two flights in a row down the same curve', () => {
-    for (let pattern = 0; pattern < ENTRANCE_PATTERN_COUNT; pattern += 1) {
-      const groups = buildEntryGroups(pattern);
-      const curves = groups.map((group) =>
-        [...new Set(group.members.map((member) => member.pathVariant))].sort().join(),
+  it('never flies all five flights of a caravan identically', () => {
+    for (const caravan of CARAVAN_ROWS) {
+      const flights = buildEntryGroups(caravan).map((group) =>
+        JSON.stringify(group.members.map((m) => [m.pathVariant, m.mirrored, m.step])),
       );
-
-      for (let i = 1; i < curves.length; i += 1) {
-        // A both-sides flight uses the same pair every time, so it is exempt:
-        // what alternates there is which side leads, inside the flight.
-        if (pattern === ENTRANCE_PATTERN_BOTH_SIDES) continue;
-        expect(curves[i]).not.toBe(curves[i - 1]);
-      }
+      expect(new Set(flights).size).toBeGreaterThan(1);
     }
   });
 

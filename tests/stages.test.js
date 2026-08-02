@@ -18,6 +18,9 @@ import {
   challengingRoster,
   nextStage,
   STAGE_ROLLOVER,
+  DifficultyRank,
+  RANK_COUNT,
+  captureMinEnemies,
 } from '../src/systems/stages.js';
 import { EnemyType } from '../src/systems/formation.js';
 
@@ -133,8 +136,8 @@ describe('challenging stage patterns', () => {
 });
 
 describe('entrance patterns', () => {
-  it('offers the three patterns the arcade has', () => {
-    expect(ENTRANCE_PATTERN_COUNT).toBe(3);
+  it('offers the thirteen caravans the arcade holds', () => {
+    expect(ENTRANCE_PATTERN_COUNT).toBe(13);
   });
 
   it('fixes one pattern for the whole of a stage', () => {
@@ -154,9 +157,9 @@ describe('entrance patterns', () => {
     }
   });
 
-  it('cycles all three rather than favouring one', () => {
+  it('reaches every caravan within one pass of the row cycle', () => {
     const seen = new Set();
-    for (let stage = 1; stage <= 12; stage += 1) seen.add(entrancePatternFor(stage));
+    for (let stage = 1; stage <= 23; stage += 1) seen.add(entrancePatternFor(stage));
     expect(seen.size).toBe(ENTRANCE_PATTERN_COUNT);
   });
 
@@ -394,5 +397,91 @@ describe('the stage counter rolling over', () => {
     }
 
     expect(seen).toEqual([251, 252, 253, 254, 255, 0, 1, 2]);
+  });
+});
+
+/**
+ * The operator's difficulty rank.
+ *
+ * The ROM holds a 4-rank by 26-stage table of bombing, capture and attack
+ * parameters, selected by a DIP switch. This build keeps one smooth curve and
+ * moves the player along it by rank, which is an approximation -- what these
+ * pin is that the rank is real, that it is monotonic, and that rank A is
+ * exactly what the game was before the dimension existed.
+ */
+describe('the difficulty rank', () => {
+  it('defaults to the factory rank when nobody asks for one', () => {
+    expect(stageDifficulty(5)).toEqual(stageDifficulty(5, DifficultyRank.A));
+    expect(enemiesBomb(1)).toBe(enemiesBomb(1, DifficultyRank.A));
+    expect(captureAllowed(4, 20)).toBe(captureAllowed(4, 20, DifficultyRank.A));
+  });
+
+  it('makes the same stage harder at every step up the ranks', () => {
+    const ranks = [DifficultyRank.A, DifficultyRank.B, DifficultyRank.C, DifficultyRank.D];
+    const curves = ranks.map((rank) => stageDifficulty(4, rank));
+
+    for (let i = 1; i < curves.length; i += 1) {
+      expect(curves[i].diveIntervalMs).toBeLessThanOrEqual(curves[i - 1].diveIntervalMs);
+      expect(curves[i].maxSimultaneousDivers).toBeGreaterThanOrEqual(
+        curves[i - 1].maxSimultaneousDivers,
+      );
+      expect(curves[i].diveSpeed).toBeGreaterThan(curves[i - 1].diveSpeed);
+      expect(curves[i].bombChance).toBeGreaterThan(curves[i - 1].bombChance);
+    }
+  });
+
+  it('keeps every rank playable however far the run goes', () => {
+    for (let rank = 0; rank < RANK_COUNT; rank += 1) {
+      for (const stage of [1, 20, 200, 255]) {
+        const curve = stageDifficulty(stage, rank);
+        expect(curve.diveIntervalMs).toBeGreaterThan(600);
+        expect(curve.bombChance).toBeLessThanOrEqual(0.95);
+        expect(curve.maxSimultaneousDivers).toBeLessThanOrEqual(9);
+      }
+    }
+  });
+
+  it('treats a corrupt rank as the factory one rather than crashing', () => {
+    expect(stageDifficulty(5, 'nonsense')).toEqual(stageDifficulty(5, DifficultyRank.A));
+    expect(stageDifficulty(5, 99)).toEqual(stageDifficulty(5, DifficultyRank.D));
+  });
+
+  // Sourced: at rank A the opening round's bomb-drop enable flags are zero, so
+  // stage 1 cannot shoot at all. That is a property of the factory setting, and
+  // the two hard ranks are where an operator takes it away.
+  it('disarms stage 1 on a factory machine and arms it on a hard one', () => {
+    expect(enemiesBomb(1, DifficultyRank.A)).toBe(false);
+    expect(enemiesBomb(1, DifficultyRank.B)).toBe(false);
+    expect(enemiesBomb(1, DifficultyRank.C)).toBe(true);
+    expect(enemiesBomb(1, DifficultyRank.D)).toBe(true);
+  });
+
+  it('never lets anything bomb during a challenging stage, at any rank', () => {
+    for (let rank = 0; rank < RANK_COUNT; rank += 1) {
+      for (const stage of [3, 7, 11, 31]) {
+        expect(enemiesBomb(stage, rank)).toBe(false);
+      }
+    }
+  });
+
+  it('holds entry fire to stage 2 whatever the operator set', () => {
+    expect(enemiesFireDuringEntry(1)).toBe(false);
+    expect(enemiesFireDuringEntry(2)).toBe(true);
+  });
+
+  it('keeps setting traps deeper into a thinning formation as the rank rises', () => {
+    const thresholds = [0, 1, 2, 3].map(captureMinEnemies);
+    for (let i = 1; i < thresholds.length; i += 1) {
+      expect(thresholds[i]).toBeLessThanOrEqual(thresholds[i - 1]);
+    }
+    // Never so deep that the captor cannot be hunted down.
+    expect(Math.min(...thresholds)).toBeGreaterThanOrEqual(2);
+  });
+
+  it('still refuses a capture before stage 2 or during a bonus round, at any rank', () => {
+    for (let rank = 0; rank < RANK_COUNT; rank += 1) {
+      expect(captureAllowed(1, 40, rank)).toBe(false);
+      expect(captureAllowed(3, 40, rank)).toBe(false);
+    }
   });
 });

@@ -12,6 +12,16 @@
  * state, so the whole module is testable without a canvas.
  */
 
+import { CARAVAN_ROWS, CARAVAN_ROW_COUNT, decodeFlyInByte } from './caravans.js';
+
+/**
+ * How many entrances the arcade holds.
+ *
+ * Thirteen caravan rows, one flown per stage. The name is kept from when this
+ * was three hard-coded patterns; what it counts now is rows in the table.
+ */
+export const ENTRANCE_PATTERN_COUNT = CARAVAN_ROW_COUNT;
+
 export const EnemyType = {
   BOSS: 'boss',
   GOEI: 'goei',
@@ -70,80 +80,62 @@ export const ENTRY_GROUP_SIZE = 8;
 export const ENTRY_GROUP_COUNT = FORMATION_SIZE / ENTRY_GROUP_SIZE;
 
 /**
- * How many distinct entrance patterns the arcade has.
+ * The caravan row the arcade flies on stage 1.
  *
- * Galaga has three, and a stage flies one of them from its first flight to its
- * last. That per-stage fixedness is the point: it is what makes an entrance
- * recognisable, and what lets a player who has seen a stage before know where
- * the wave is about to come from.
- */
-export const ENTRANCE_PATTERN_COUNT = 3;
-
-/**
- * The pattern where the wave arrives from the left and the right at once.
- *
- * Sourced as the distinguishing feature of the first of the three: it "is the
- * only pattern where enemies will enter from both sides of the screen at the
- * same time, with enemies entering single file in short rows". The other two
- * also use both sides, but one flight at a time.
+ * Sourced twice over: the ROM's own stage-1 row is caravan 0 at every rank, and
+ * the strategy guides describe the first entrance a player meets as "the only
+ * pattern where enemies will enter from both sides of the screen at the same
+ * time, with enemies entering single file in short rows". Decoding that row's
+ * bytes produces exactly that -- four pairs, one arrival from each side per
+ * beat -- which is the check that the encoding in `caravans.js` is being read
+ * the right way round.
  */
 export const ENTRANCE_PATTERN_BOTH_SIDES = 0;
 
 /**
- * The three entrance patterns, as a curve pair plus how a flight is spaced
- * along it. `curves` index the variants in `paths.entryPath`.
+ * Split the wave into its five entry flights, following a caravan row.
  *
- * `paired` is the both-sides rule: members alternate between the two curves
- * and launch two at a time, one from each side, which is the "short rows"
- * of the sourced description. The other two patterns put a whole flight on one
- * curve, single file, and alternate which curve between flights.
- */
-const ENTRANCE_PATTERNS = [
-  // Left and right loops simultaneously.
-  { curves: [0, 1], paired: true },
-  // Top-corner sweeps, alternating flights.
-  { curves: [2, 3], paired: false },
-  // Side loops, alternating flights.
-  { curves: [0, 1], paired: false },
-];
-
-/**
- * Split the wave into its five entry flights for one stage's pattern.
+ * A row is five `[evenMemberByte, oddMemberByte]` pairs; see `caravans.js` for
+ * what a path byte holds. Every member comes out carrying the shape it flies,
+ * whether that shape is mirrored, and its `step` -- its place in the flight's
+ * launch order, which the scene turns into a delay by multiplying by the
+ * stagger. Two members sharing a step take off together, which is what an
+ * ungated path byte means and how a flight puts one arrival from each side in
+ * the air at the same moment.
  *
- * Every member carries the curve it flies and its `step`, the position in the
- * flight's launch order: the scene turns a step into a delay by multiplying by
- * the stagger. Two members sharing a step take off together, which is how the
- * both-sides pattern gets one arrival from each side at the same moment.
- *
- * The version this replaced held a single fixed list of five curves,
- * `[2, 3, 0, 1, 2]`, and used it for every stage. That mixed top-corner sweeps
- * and side loops inside one wave, so no stage ever flew one of the arcade's
- * three patterns cleanly, and every stage entered identically.
+ * The version this replaced held three hard-coded `{curves, paired}` patterns.
+ * The behaviour of the first two is reproduced exactly by rows 0 and 6 of the
+ * caravan table, but as data rather than as a branch, which is what let the
+ * count go from three to thirteen without any new code here.
  *
  * Slots are taken in build order, which is what makes each flight a
  * contiguous, mostly single-type block: the first is the four Boss Galaga and
  * their four Goei, the next two are Goei, the last two are Zako.
  */
-export function buildEntryGroups(pattern = 0) {
-  const { curves, paired } = ENTRANCE_PATTERNS[pattern % ENTRANCE_PATTERN_COUNT];
+export function buildEntryGroups(caravan = CARAVAN_ROWS[ENTRANCE_PATTERN_BOTH_SIDES]) {
   const slots = buildFormationSlots();
   const groups = [];
 
   for (let index = 0; index < ENTRY_GROUP_COUNT; index += 1) {
+    const [evenByte, oddByte] = caravan[index % caravan.length];
     const start = index * ENTRY_GROUP_SIZE;
     const slotIndices = slots
       .slice(start, start + ENTRY_GROUP_SIZE)
       .map((slot) => slot.index);
 
-    groups.push({
-      index,
-      slotIndices,
-      members: slotIndices.map((slotIndex, position) => ({
-        slotIndex,
-        pathVariant: paired ? curves[position % 2] : curves[index % curves.length],
-        step: paired ? Math.floor(position / 2) : position,
-      })),
+    // The beat only advances for a gated member, so an ungated one launches
+    // alongside whoever went before it. The first member of a flight never
+    // advances the beat, gated or not: it *is* the beat the flight starts on.
+    let step = 0;
+    const members = slotIndices.map((slotIndex, position) => {
+      const { pathIndex, mirrored, immediate } = decodeFlyInByte(
+        position % 2 === 0 ? evenByte : oddByte,
+      );
+      if (position > 0 && !immediate) step += 1;
+      return { slotIndex, pathVariant: pathIndex, mirrored, step };
     });
+
+    groups.push({ index, slotIndices, members });
   }
 
   return groups;

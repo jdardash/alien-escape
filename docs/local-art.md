@@ -13,6 +13,9 @@ it, the images it names are loaded at startup and used in place of the drawn shi
 repository, the demo, or a pull request. If you are keeping the arcade sprites on your own
 machine, that is where they go.
 
+The audio works the same way, one directory down in `assets/local/sfx/`; see
+[local-audio.md](local-audio.md).
+
 ## Setting it up
 
 Create the directory and drop your images in, then write a manifest beside them:
@@ -96,9 +99,10 @@ repository ships.
 
 ## Sharing it
 
-The directory is the unit. Zip `assets/local/` and hand it to whoever is playing; they
-clone the repository normally and drop the folder in. Keep it off anything public — the
-reason this mechanism exists at all is so that the artwork and the repository stay separate.
+The directory is the unit. Zip `assets/local/` -- artwork and audio together -- and hand it
+to whoever is playing; they clone the repository normally and drop the folder in. Keep it
+off anything public — the reason this mechanism exists at all is so that the cabinet's
+assets and the repository stay separate.
 
 ## When it is not there
 

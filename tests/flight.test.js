@@ -8,9 +8,10 @@ import {
 } from '../src/systems/flight.js';
 
 /** A straight run rightward, so headings are easy to reason about. */
-const straight = [
-  [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 20, y: 0 }, { x: 30, y: 0 }],
-];
+const straight = {
+  kind: 'track',
+  points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 20, y: 0 }, { x: 30, y: 0 }],
+};
 
 describe('creating a flight', () => {
   it('starts at zero elapsed', () => {
@@ -76,9 +77,10 @@ describe('transform', () => {
 
   it('points the ship along its direction of travel', () => {
     // Travelling straight down should leave the upward-facing art unrotated.
-    const downward = [
-      [{ x: 0, y: 0 }, { x: 0, y: 10 }, { x: 0, y: 20 }, { x: 0, y: 30 }],
-    ];
+    const downward = {
+      kind: 'track',
+      points: [{ x: 0, y: 0 }, { x: 0, y: 10 }, { x: 0, y: 20 }, { x: 0, y: 30 }],
+    };
     const flight = advanceFlight(createFlight(downward, 1000), 500);
     expect(flightTransform(flight).angle).toBeCloseTo(0, 5);
   });

@@ -10,8 +10,30 @@
 
 import { CHALLENGING_PATTERN_COUNT } from './paths.js';
 import { ENTRANCE_PATTERN_COUNT, EnemyType, FORMATION_SIZE } from './formation.js';
+import {
+  CARAVAN_ROW_COUNT,
+  COMBAT_STAGE_ROWS,
+  DifficultyRank,
+  RANK_COUNT,
+  RANK_NAMES,
+  caravanFor,
+  caravanIndexFor,
+  combatStageIndex,
+  normalizeRank,
+} from './caravans.js';
 
-export { CHALLENGING_PATTERN_COUNT, ENTRANCE_PATTERN_COUNT };
+export {
+  CHALLENGING_PATTERN_COUNT,
+  ENTRANCE_PATTERN_COUNT,
+  CARAVAN_ROW_COUNT,
+  COMBAT_STAGE_ROWS,
+  DifficultyRank,
+  RANK_COUNT,
+  RANK_NAMES,
+  caravanFor,
+  combatStageIndex,
+  normalizeRank,
+};
 
 /** Stage 3, then 7, 11, 15, and so on. */
 export function isChallengingStage(stage) {
@@ -59,16 +81,19 @@ export function enemiesFireDuringEntry(stage) {
  *
  * Stage 1 is not merely gentle in the arcade, it is unarmed: the per-stage
  * difficulty table (`bmbr_stg_cfg_dat`) has the bomb-drop enable flags at zero
- * for the opening round, so the only way to die on stage 1 is to be flown into.
- * That is what makes the first screen the place a new player learns the
- * formation without being punished for standing still.
+ * for the opening round *at rank A*, so on a factory machine the only way to
+ * die on stage 1 is to be flown into. That is what makes the first screen the
+ * place a new player learns the formation without being punished for standing
+ * still -- and it is a property of the operator's difficulty setting rather
+ * than of the game, which is why the two hard ranks take it away.
  *
  * `enemiesFireDuringEntry` remains the narrower rule of the two -- whether a
- * ship still flying into formation may bomb -- and a stage where nothing bombs
- * at all necessarily holds fire on the way in as well.
+ * ship still flying into formation may bomb -- and it holds to stage 2 at every
+ * rank, so even the hardest setting lets the opening wave assemble unopposed.
  */
-export function enemiesBomb(stage) {
-  return stage >= 2 && !isChallengingStage(stage);
+export function enemiesBomb(stage, rank = DifficultyRank.A) {
+  if (isChallengingStage(stage)) return false;
+  return stage >= 2 || normalizeRank(rank) >= DifficultyRank.C;
 }
 
 /**
@@ -83,6 +108,18 @@ export function enemiesBomb(stage) {
 export const CAPTURE_MIN_ENEMIES = 5;
 
 /**
+ * The threshold at a given rank.
+ *
+ * The capture flag lives in the same per-rank table as the bombing flags, so a
+ * harder machine keeps setting traps deeper into a thinning formation. Floored
+ * at two, because a capture attempted by the last enemy on screen leaves the
+ * player nothing to shoot the captor out of.
+ */
+export function captureMinEnemies(rank = DifficultyRank.A) {
+  return Math.max(CAPTURE_MIN_ENEMIES - normalizeRank(rank), 2);
+}
+
+/**
  * Whether a Boss Galaga may attempt a tractor beam right now.
  *
  * Two gates, neither of them a clock. The arcade enables captures per stage
@@ -90,9 +127,9 @@ export const CAPTURE_MIN_ENEMIES = 5;
  * attempting them once the formation is down to a handful. The scene still runs
  * a timer to decide *when* to try; this decides whether trying is legal at all.
  */
-export function captureAllowed(stage, enemiesRemaining) {
+export function captureAllowed(stage, enemiesRemaining, rank = DifficultyRank.A) {
   if (stage < 2 || isChallengingStage(stage)) return false;
-  return enemiesRemaining > CAPTURE_MIN_ENEMIES;
+  return enemiesRemaining > captureMinEnemies(rank);
 }
 
 /**
@@ -110,81 +147,70 @@ export function challengingPatternIndex(stage) {
 }
 
 /**
- * How many entrance rows the arcade cycles through before repeating.
+ * Which caravan this stage's wave flies in on.
  *
- * The ROM indexes its fly-in data as `d_combat_stg_dat_idx[rank * 17 + row]`:
- * seventeen rows per difficulty rank, pointing into thirteen distinct caravan
- * shapes in `d_combat_stg_dat`. Seventeen is the number that matters here,
- * because it is the period -- it is how long a player plays before an entrance
- * they have seen comes round again.
+ * Fixed for the whole of a stage: all five flights come out of one row of the
+ * table in `caravans.js`. Which row follows the arcade's own arithmetic --
+ * `d_combat_stg_dat_idx[rank * 17 + (stage - stage/4 - 1)]` -- so both the
+ * period and the rank dimension are the cabinet's, and a stage is a different
+ * entrance on a machine the operator has set harder.
  */
-export const COMBAT_STAGE_ROWS = 17;
-
-/**
- * The arcade's entrance row for a stage.
- *
- * Reproduces the ROM's index arithmetic: wrap anything past 23 back by four
- * until it is inside the table, then take `stage - stage/4 - 1`. The `- stage/4`
- * is what makes this count *combat* stages rather than stages: a challenging
- * stage has no formation to assemble, does not consume a row, and so stages 2
- * and 4 are neighbours in this sequence even though 3 sits between them.
- *
- * The result is that the seventeen rows are used in order across stages 1-22
- * (minus the challenging ones), and from stage 24 onward the wrap pins every
- * later stage onto one of the last three rows.
- *
- * A challenging stage never asks -- `launchChallengingStage` does not build a
- * formation -- so the clamp exists only so that a stray call cannot return an
- * index off the end of the table.
- */
-export function combatStageIndex(stage) {
-  let wrapped = stage;
-  while (wrapped > 0x17) wrapped -= 4;
-
-  const row = wrapped - Math.floor(wrapped / 4) - 1;
-  return Math.min(Math.max(row, 0), COMBAT_STAGE_ROWS - 1);
+export function entrancePatternFor(stage, rank = DifficultyRank.A) {
+  return caravanIndexFor(stage, rank);
 }
 
 /**
- * Which entrance pattern this stage's wave flies in on.
+ * Where the difficulty ramp stops climbing.
  *
- * The pattern is fixed for the whole of a stage: all five flights belong to one
- * of the three shapes in `formation.js`. Which stage draws which follows the
- * arcade's own row cycle above rather than a plain `stage % 3`, so the *period*
- * is authentic -- seventeen combat stages, wrapping by four after 23 -- even
- * though the repo authors three shapes where the ROM stores thirteen.
- *
- * Being honest about what is and is not authentic here: that entrances are
- * fixed per stage, that they repeat on the arcade's schedule, and that no two
- * consecutive combat stages share one are all real. That the wave arriving on
- * stage 9 is the *specific* shape the cabinet flies on stage 9 is not claimed;
- * reproducing that needs all thirteen caravan rows and the rank-indexed table
- * that selects between them.
+ * Galaga stops getting harder somewhere around the high teens. Without a
+ * plateau the dive interval would eventually reach zero and the game would be
+ * unplayable rather than difficult.
  */
-export function entrancePatternFor(stage) {
-  return combatStageIndex(stage) % ENTRANCE_PATTERN_COUNT;
-}
+const DIFFICULTY_PLATEAU = 16;
 
 /**
- * Difficulty knobs for a stage.
+ * How many stages of ramp one rank of the DIP switch is worth.
  *
- * Values ramp then plateau. Galaga stops getting harder somewhere around the
- * high teens; without a floor the dive interval would eventually reach zero
- * and the game would become unplayable rather than difficult.
+ * The arcade does not scale a curve, it holds a separate 26-stage row of
+ * parameters per rank. This build keeps one smooth curve and moves the player
+ * along it, which is deliberately an approximation and is the one part of the
+ * difficulty model that is not the ROM's: three stages a rank puts a rank-D
+ * stage 1 at roughly the pressure of a rank-A stage 10, which is the right
+ * order of magnitude for a setting an operator uses to shorten games.
+ */
+const RANK_STAGE_ADVANCE = 3;
+
+/**
+ * How often an attacker that is allowed to bomb actually does.
+ *
+ * Lives here rather than in `config.js` because it is a difficulty parameter
+ * and the whole point of the rank dimension is that difficulty parameters vary
+ * with it. The rank-A value is the one the game was tuned at.
+ */
+const BASE_BOMB_CHANCE = 0.65;
+
+/**
+ * Difficulty knobs for a stage, at a rank.
+ *
+ * Values ramp then plateau, and the rank shifts where on the ramp a given
+ * stage sits as well as lifting the ceilings a little. Called without a rank
+ * this is rank A, the factory setting, and returns exactly what it always did.
  *
  * There is deliberately no rate of fire for the formation. In the arcade an
  * enemy only ever bombs while it is flying, on its way in or on an attack run;
  * a ship sitting in the grid never shoots. Firing from the formation made the
  * whole grid a threat at all times and flattened the rhythm the dives create.
  */
-export function stageDifficulty(stage) {
-  const ramp = Math.min(stage, 16);
+export function stageDifficulty(stage, rank = DifficultyRank.A) {
+  const level = normalizeRank(rank);
+  const ramp = Math.min(stage + level * RANK_STAGE_ADVANCE, DIFFICULTY_PLATEAU);
 
   return {
-    diveIntervalMs: Math.max(3000 - ramp * 160, 900),
-    maxSimultaneousDivers: Math.min(1 + Math.floor(ramp / 3), 6),
-    diveSpeed: Math.min(1 + ramp * 0.045, 1.7),
-    escortChance: Math.min(0.2 + ramp * 0.03, 0.75),
+    diveIntervalMs: Math.max(3000 - ramp * 160, 900 - level * 60),
+    maxSimultaneousDivers: Math.min(1 + Math.floor(ramp / 3) + level, 6 + level),
+    diveSpeed: Math.min(1 + ramp * 0.045 + level * 0.06, 1.7 + level * 0.1),
+    escortChance: Math.min(0.2 + ramp * 0.03 + level * 0.05, 0.75 + level * 0.05),
+    bombChance: Math.min(BASE_BOMB_CHANCE + level * 0.08, 0.95),
   };
 }
 

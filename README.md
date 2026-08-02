@@ -1,11 +1,13 @@
-# Alien Escape
+# Alien Escape - a Galaga replica
 
-A Galaga tribute where the game rules live in pure, dependency-free ES modules that never import Phaser, so they can be unit tested headlessly. The Phaser scenes are thin orchestration over that logic.
+A Galaga replica where the game rules live in pure, dependency-free ES modules that never import Phaser, so they can be unit tested headlessly. The Phaser scenes are thin orchestration over that logic.
+
+> **Unofficial fan tribute.** Not affiliated with, endorsed by, or sponsored by Bandai Namco Entertainment Inc. *Galaga* is their trademark, used here only to describe what this project reimplements.
 
 ## [Play it in your browser](https://jdardash.github.io/alien-escape/)
 
 [![CI](https://img.shields.io/github/actions/workflow/status/jdardash/alien-escape/ci.yml?branch=main&label=CI)](https://github.com/jdardash/alien-escape/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-289%20passing-success)](tests/)
+[![Tests](https://img.shields.io/badge/tests-424%20passing-success)](tests/)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Build step](https://img.shields.io/badge/build%20step-none-lightgrey)](index.html)
 
@@ -27,19 +29,26 @@ lib/phaser.js         vendored, loaded as a classic script (no CDN dependency)
 src/main.js           Phaser config, scene registration
 src/config.js         tuning constants in one place
 src/systems/          PURE. No Phaser import. Fully unit tested.
-  formation.js        40-slot grid, breathing, sway, entrance patterns
+  formation.js        40-slot grid, breathing, sway, entry flights
+  caravans.js         the 13 entrance rows, in the arcade's own path-byte encoding
   paths.js            Bezier entry, dive, return and challenging-stage paths
   flight.js           frame-rate-independent traversal of a path
   scoring.js          score tables, extra-life thresholds
-  stages.js           stage progression, difficulty, transform cycle, rollover
+  stages.js           stage progression, difficulty rank, transform cycle, rollover
   capture.js          tractor beam capture and rescue state machine
-  persistence.js      BEST 5 board and high score via injected storage
+  players.js          two-player alternating turns: whose ship, whose score
+  demo.js             the pilot that flies the attract screen
+  persistence.js      BEST 5 board, high score and difficulty rank via injected storage
   stats.js            shots, hits, hit-miss ratio
-  audio.js            the sound manifest and which sound plays when
+  audio.js            which sound plays when
 src/art/              PURE. Every ship, drawn as a 16 x 16 pixel grid.
   pixelArt.js         the grids and palettes, plus a strict parser
   textures.js         the one seam that turns a grid into a Phaser texture
   localArt.js         optional local sprite overrides; see docs/local-art.md
+src/audio/            PURE. Every sound, synthesised rather than sampled.
+  synth.js            waveforms, envelopes, glides, an LFSR for the noise
+  soundBank.js        the spec for all 28 sounds, and the one Phaser seam
+  localAudio.js       optional local sound overrides; see docs/local-audio.md
 src/entities/         sprite construction helpers
 src/scenes/           Phaser-aware. Thin orchestration.
   TitleScene.js  GameScene.js  GameOverScene.js
@@ -74,7 +83,7 @@ The scenes still do real work, but it is orchestration: create sprites, read inp
 - **An attract mode**, not a title screen: the cabinet's own loop of logo, the `-- SCORE --` chart of what every enemy is worth in formation and attacking (including the boss escort tiers), the extra-ship ladder, and the board — over a `CREDIT` line and `PUSH START BUTTON`. Every figure on the chart is read from `scoreFor()` as it is drawn, so it cannot drift from the table it documents
 - **A BEST 5 board with initials entry**: a run that makes the top five is asked for three initials, and the board survives a reload
 - **Hit-miss ratio** reported at game over, which is what makes the two-bullet limit a scored constraint rather than an annoyance
-- **Per-rank audio**: every rank of enemy has its own cry, a boss surviving its first hit sounds different from one dying, and the gun alternates two samples so a burst does not flatten into a tone
+- **Per-rank audio**: every rank of enemy has its own cry, a boss surviving its first hit sounds different from one dying, and the gun alternates two samples so a burst does not flatten into a tone. All 28 sounds are synthesised at startup from the specs in [src/audio/soundBank.js](src/audio/soundBank.js) — square, triangle and saw voices over a shift-register noise source, which is the palette the cabinet's own Namco WSG had. Nothing is sampled and nothing is downloaded
 
 ## Defects found and fixed
 
@@ -94,7 +103,7 @@ These were found by reading the original `GameScene.js` before rewriting it. The
 
 ```bash
 npm install
-npm test        # vitest run  - 289 tests across 10 files
+npm test        # vitest run  - 424 tests across 17 files
 npm run lint    # eslint .
 ```
 
@@ -122,6 +131,11 @@ Because there is no build step, GitHub Pages serves the repository root unchange
 | --- | --- |
 | `A` / `D` or arrow keys | Move |
 | `Space` | Fire |
+| `Space` or `1` on the attract screen | Start a one-player game |
+| `2` on the attract screen | Start a two-player game, taking turns |
+| `R` on the attract screen | Cycle the difficulty rank, A to D |
+
+Leave the attract screen alone for half a minute and the machine plays itself, as the cabinet does. Any start button takes the game off it.
 
 ## Screenshots
 
@@ -135,6 +149,8 @@ Because there is no build step, GitHub Pages serves the repository root unchange
 | Dual fighter, firing two | A trio of Galaxian Flagships |
 | ![Initials entry](docs/screenshots/name-entry.png) | ![Game over](docs/screenshots/gameover.png) |
 | Initials entry for a top-five run | Results with hit-miss ratio |
+| ![Demo play](docs/screenshots/demo-play.png) | ![Two-player alternating](docs/screenshots/two-player.png) |
+| The attract screen playing itself | Two players alternating, both columns live |
 
 ## Built with
 
@@ -160,6 +176,10 @@ Phaser 3, vendored in `lib/`, ships under its own MIT license and its own copyri
 
 **The ship artwork is original.** Every fighter, enemy, bonus ship and stage flag is a hand-authored pixel grid in [src/art/pixelArt.js](src/art/pixelArt.js), drawn to the published descriptions of each ship rather than traced from the ROM, and generated as a texture at run time. It is MIT along with the rest of the code. The Galaga-derived enemy PNGs this replaced have been deleted from the working tree, though they remain in this repository's git history.
 
-A local checkout can substitute its own sprites through a gitignored `assets/local/` directory — see [docs/local-art.md](docs/local-art.md). Nothing put there can reach this repository, the demo, or a pull request, and the title screen labels any run that is using it.
+**The audio is original too.** All 28 sounds are synthesised at run time from the specs in [src/audio/soundBank.js](src/audio/soundBank.js). The effects are arithmetic; the four melodic pieces — the attract theme, the two end-of-game tunes and the rescue fanfare — are written for this game rather than transcribed from Galaga's, whose compositions are as much Bandai Namco's as its sprites are. This replaced 28 mp3s ripped from the ROM, which were committed here and served from the public demo. They have been removed from the working tree and remain only in git history. [tests/audio.test.js](tests/audio.test.js) reads `git ls-files` and fails if any audio file is ever committed again.
 
-The **audio** under `assets/sfx/` is Galaga-derived and is used here for a non-commercial tribute; it remains the property of its respective owners and is not covered by this repository's license. The same applies to the remaining loaded images (the starfield, the two projectiles, the explosion and the tractor beam).
+A local checkout can substitute the cabinet's own sprites and samples through a gitignored `assets/local/` directory — see [docs/local-art.md](docs/local-art.md) and [docs/local-audio.md](docs/local-audio.md). Nothing put there can reach this repository, the demo, or a pull request, and the title screen labels any run that is using it.
+
+Naming this a replica, a tribute or a clone is not a licence for any of the above, which is why none of it is copied. **What is copied is the design**: the rules, the timings, the formation shapes and the scoring tables, none of which copyright covers. What remains loaded from disk is the starfield, the two projectiles, the explosion and the tractor beam, which are Galaga-derived, used here for a non-commercial tribute, the property of their respective owners, and not covered by this repository's license.
+
+**Trademark.** *Galaga* and *Bandai Namco* are trademarks of Bandai Namco Entertainment Inc. This project is not affiliated with, endorsed by, or sponsored by them. The name is used descriptively, to identify the arcade game this repository reimplements, and the project ships under its own distinct name. No official assets, logos or branding are claimed.

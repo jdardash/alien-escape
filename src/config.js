@@ -139,8 +139,10 @@ export const FORMATION_BOTTOM_Y = FORMATION.topY + 4 * FORMATION.spacingY;
 export const DIVE = {
   durationMs: 3000,
   returnDurationMs: 1500,
-  bombChance: 0.65,
   bombSpeed: 360,
+  // How often an attacker that is allowed to bomb actually does now lives in
+  // `stageDifficulty`, because it varies with the operator's difficulty rank
+  // and a constant here could only hold the rank-A value.
   /**
    * How far into a run an attacker releases its bomb.
    *

@@ -62,8 +62,13 @@ Primary directly-fetched sources:
 | Fire-rate gate | None beyond the bullet limit and shot lifetime — a shot that hits frees its slot immediately ([Steam community guide](https://steamcommunity.com/sharedfiles/filedetails/?id=2926871061)) | Bullet limit only; the 180 ms cooldown was removed (`GameScene.fire`) | matches |
 | When enemies fire | "Enemies only drop bombs while they arrive or while they are in a dive; they do not drop bombs while in formation." ([Academic Kids](https://academickids.com/encyclopedia/index.php/Galaga)) | Bombing gated on `DIVING`/`ENTERING` only; no formation fire timer exists (`GameScene.advanceEnemyFlight`) | matches |
 | Max enemy shots on screen | 8 hardware sprites reserved for enemy shots ([Set Side B](https://setsideb.com/the-no-fire-trick-in-galaga/)) | 8 (`DIVE.maxBombs`, enforced in `GameScene.fireEnemyBullet`) | matches |
-| Entry to formation | "At the beginning of each level, the enemies arrive in five groups of eight enemies each" ([Academic Kids](https://academickids.com/encyclopedia/index.php/Galaga)); three distinct entrance patterns, fixed per stage ([StrategyWiki Walkthrough, snippet](https://strategywiki.org/wiki/Galaga/Walkthrough)) | Five flights of eight, gated behind one another, all five drawn from the one pattern `entrancePatternFor(stage)` assigns to that stage (`stages.js`, `buildEntryGroups(pattern)`, `GameScene.launchFormation`). Which stage draws which pattern is an assumption; see the remainder list | matches |
-| The first entrance pattern | "the only pattern where enemies will enter from both sides of the screen at the same time, with enemies entering single file in short rows" ([StrategyWiki Walkthrough, snippet](https://strategywiki.org/wiki/Galaga/Walkthrough)) | Pattern 0 alone launches paired members, one from each side per step; the other two are single file, one curve per flight. `tests/formation.test.js` asserts exactly one pattern has this property | matches |
+| Entry to formation | "At the beginning of each level, the enemies arrive in five groups of eight enemies each" ([Academic Kids](https://academickids.com/encyclopedia/index.php/Galaga)); entrance patterns fixed per stage ([StrategyWiki Walkthrough, snippet](https://strategywiki.org/wiki/Galaga/Walkthrough)) | Five flights of eight, gated behind one another, all five decoded from the one caravan row `caravanFor(stage, rank)` assigns to that stage (`caravans.js`, `buildEntryGroups(caravan)`, `GameScene.launchFormation`) | matches |
+| Entrance data | `d_combat_stg_dat`: 13 caravan rows of 18 bytes -- header, five three-byte triplets, terminator -- selected by `d_combat_stg_dat_idx[rank * 17 + row]`. A path byte holds the path in bits 0-5, a mirror flag in bit 6 and a launch gate in bit 7 ([ROM research corpus](https://github.com/ZaneLogi/ZaneLogi.github.io/tree/main/galaga_clone)) | The same 13 rows in the same encoding, decoded by `decodeFlyInByte` (`src/systems/caravans.js`). Row 0 is the arcade's own stage-1 row byte for byte; the other twelve and the index table are authored in the ROM's encoding because the bytes were never published. Six fly-in shapes are authored against the ROM's 22 | matches in structure; 12 of 13 rows authored |
+| The first entrance pattern | "the only pattern where enemies will enter from both sides of the screen at the same time, with enemies entering single file in short rows" ([StrategyWiki Walkthrough, snippet](https://strategywiki.org/wiki/Galaga/Walkthrough)) | Falls straight out of the arcade's stage-1 bytes: `0x00 / 0xC0` is one shape, mirrored, with the second member ungated, so the flight arrives as four pairs, one from each side per beat. Nothing special-cases it -- `tests/formation.test.js` pins that the decode produces it | matches |
+| Difficulty rank | `bmbr_stg_cfg_dat` is 4 ranks x 26 stages x 5 bytes, selected by a DIP switch the operator sets ([ROM research corpus](https://github.com/ZaneLogi/ZaneLogi.github.io/tree/main/galaga_clone)) | Four ranks A-D, set from the attract screen and stored like a machine setting (`loadRank`/`saveRank`). Rank moves the player along one smooth difficulty curve, gates stage-1 bombing, lowers the capture threshold and picks a different caravan for the same stage. The 26-row table itself is deliberately not ported | matches in effect, not in data |
+| Two-player play | Two start buttons; players alternate, each with their own score, ships, stage and accuracy, and the live one's `nUP` blinks | `src/systems/players.js` is the session: `loseShip` spends the life, retires the player and hands the machine over, and `GameScene.handOverTurn` tears the board down and restarts the incoming player's own stage. Both score columns are live and the results screen reports two runs side by side | matches |
+| Attract mode | Logo, value chart, copyright, **demo play**, high-score board, round again ([StewBC/Galaga `attract.agc`](https://github.com/StewBC/Galaga/blob/master/attract.agc)) | Four panels on a six-second cycle, then the machine plays itself for 42 seconds and returns to the logo. The demo pilot is a pure function of the board in `src/systems/demo.js`; it is subject to every rule a player is, and it never touches the score table | matches |
+| Credit model | `CREDIT n` at all times, `PUSH START BUTTON`, coin sound tied to the credit going up | `CREDIT 2` on the attract screen, counting down by the number of players a start button takes. A browser has no coin slot, so the machine is effectively on free play and the credits reset with the attract loop | matches, on free play |
 | Divers return to formation | Survivors exit and re-enter to rejoin the grid | Same (`GameScene.js:743-750`) | matches |
 | Formation motion | Formation sways and "throbs like a living thing" ([Retro Game Deconstruction Zone](https://www.retrogamedeconstructionzone.com/2020/05/metamorphosis-from-galaxian-to-galaga.html)) | Sinusoidal breathe plus sway (`formation.js:73-84`) | matches (qualitatively) |
 | Tractor beam trigger | A Boss Galaga "peels off and dives straight down in a markedly different pattern from the usual one-loop off the side, stops two inches above the bottom of the screen", then the beam fans downward ([StrategyWiki Walkthrough, snippet](https://strategywiki.org/wiki/Galaga/Walkthrough)) | Boss descends low into the player's half and opens the beam there; "FIGHTER CAPTURED" banner on success (`CAPTURE` in `config.js`, `GameScene.attemptCapture`) | matches |
@@ -89,7 +94,7 @@ Primary directly-fetched sources:
 | Stage flags drawn as flags | Yes, sprite flags | Six pixel-art pennants, one per denomination, each with its own colour *and* its own banner motif so they stay countable in greyscale (`FLAG_MOTIFS` in `src/art/pixelArt.js`, `createFlagTextures`) | matches (art original, not the ROM's) |
 | Enemy hit sounds | Each rank of enemy has its own cry, and a Boss Galaga surviving its first hit sounds different from one dying | `deathSoundFor` picks per `EnemyType`, with a separate boss-stricken sound for the survived hit (`src/systems/audio.js`, `GameScene.destroyEnemy` / `onEnemyHit`) | matches |
 | Player gun sound | Two alternating shot samples | `playerShotSound` alternates per trigger pull, so a dual fighter firing two at once does not lock to one sample | matches |
-| Sounds in use | The cabinet is noisy: theme, coin, start jingle, dive, bomb, beam, capture, rescue, transform fanfare, extend chime, challenging-stage stings, death tune, a background pulse | All 28 of the repo's sound files are wired to those events (`SOUND_FILES`). Before the audio pass, 7 were, and `tests/audio.test.js` now reads `assets/sfx` off disk so a file cannot be added and then forgotten | matches |
+| Sounds in use | The cabinet is noisy: theme, coin, start jingle, dive, bomb, beam, capture, rescue, transform fanfare, extend chime, challenging-stage stings, death tune, a background pulse | All 28 sounds are wired to those events, and `SOUND_NAMES` is read off the bank so one cannot be composed and then forgotten. Before the audio pass, 7 of 28 were wired. All 28 are now synthesised rather than sampled -- the ripped mp3s are gone, and `tests/audio.test.js` fails if any audio file is committed again | matches |
 | End-of-game results | Shots fired, number of hits, hit-miss ratio ([Data Driven Gamer](https://datadrivengamer.blogspot.com/2019/07/game-78-galaga.html)) | All three (`GameOverScene.js:61-68`, `stats.js`) | matches |
 | Score ranking | The cabinet keeps a table of five and asks anyone who makes it for three initials, then shows the board on the attract screen | `loadScoreTable` / `scoreTableRank` / `insertScoreEntry` / `recordScore` in `persistence.js`, the entry panel in `GameOverScene`, and the board on both the results and title screens. Twenty-nine tests pin the ranking, the tie rule and the corrupt-storage fallbacks | matches |
 | Name-entry music | A different tune for taking first place than for taking any other place | `highScoreEntry` for rank 0, `gameOverTune` otherwise (`GameOverScene.create`). Those are the repo's two `name_entry` files, which had been playing as a generic game-over sting | matches |
@@ -110,11 +115,20 @@ that rolls over at 255, and a BEST 5 board that takes three initials.
 
 **What is still not authentic**, and is the honest remainder of this audit:
 
-- **Which stage flies which entrance pattern is an assumption.** That there are three
-  patterns and that one is fixed for the whole of a stage is sourced and is now how the
-  code works; the specific stage-to-pattern mapping is not sourced anywhere that could
-  be found, so `entrancePatternFor` cycles them in order. A player who knows the arcade
-  would see the right *kind* of entrance, not necessarily the right one for stage 7.
+- **Twelve of the thirteen caravan rows are authored, not the ROM's.** The *encoding* is
+  the arcade's and so is the shape of the table -- thirteen rows, five flights to a row,
+  two path bytes to a flight, a mirror bit, a launch gate, and a rank-indexed selector with
+  a seventeen-stage period. Row 0 is the cabinet's own stage-1 row byte for byte. The other
+  twelve rows and the index table are written in that encoding rather than read out of the
+  ROM, because the bytes were never published in the material this was reconstructed from.
+  So a player who knows the arcade sees the right *structure* on every stage and the right
+  *entrance* on stage 1. The same applies to the fly-in shapes themselves: six are authored
+  against the ROM's twenty-two.
+- **The difficulty rank is an effect, not a table.** The arcade holds 4 ranks x 26 stages
+  of bombing, capture and attack parameters. This has four ranks that move the player along
+  one smooth curve and flip the two flags that are individually sourced -- stage-1 bombing
+  and the capture gate. It is the right dimension with the wrong resolution, and porting
+  the 26-row table is deliberately not done.
 - **All of the artwork is original, not the arcade's.** Every ship in the game -- the
   fighter, the fighter a boss takes, the Zako, the Goei, the Boss Galaga in both of its
   health states, the Scorpion, the Spy Ship and the Flagship -- plus the six stage flags
@@ -131,9 +145,11 @@ that rolls over at 255, and a BEST 5 board that takes three initials.
   28 is wired to an event the sources describe. `kill.mp3` survives as the generic burst
   for things that are not one of the three ranked enemies.
 
-Also deliberately absent: the "no-fire" bug (see the last row of the table for why that
-one stays out), and two-player alternating play, which needs a second set of everything
-the machine tracks and would show up on a browser demo as a menu nobody uses.
+Also deliberately absent: the "no-fire" bug, and only that. See the last row of the table
+for why it stays out. Two-player alternating play, which earlier revisions of this report
+declined on the grounds that it "needs a second set of everything the machine tracks", is
+now implemented -- that turned out to be an argument for building it, since a second set of
+everything the machine tracks is exactly what `src/systems/players.js` is.
 
 ---
 
@@ -549,11 +565,16 @@ over purple artwork, and the whole sprite sheet becomes testable data -- `tests/
 asserts every ship is symmetric about its centre line, that the four ranks have four different
 silhouettes, and that each recolour is pixel-identical to the ship it recolours.
 
-**And the last sound.** `challengeResultSound` gives `miss.mp3` the one event that fits it:
-a Challenging Stage that ended short of forty. All 28 files are now wired, and
-`tests/audio.test.js` reads `assets/sfx` off disk and fails if a file is added without an
-event, which is how the previous twenty-one came to be sitting there unreferenced in the
-first place.
+**And the last sound.** `challengeResultSound` gives `challengeMiss` the one event that fits
+it: a Challenging Stage that ended short of forty. All 28 sounds are now wired, and
+`SOUND_NAMES` is read straight off the bank, so a sound cannot be composed without an event
+-- which is how twenty-one of the original files came to be sitting there unreferenced in
+the first place.
+
+Those files are gone. Every sound is now synthesised from a spec in
+`src/audio/soundBank.js`; the mp3s they replaced were ripped from the ROM and served from a
+public demo, and `tests/audio.test.js` now reads `git ls-files` and fails if any audio file
+is ever committed again. See `docs/local-audio.md`.
 
 ## 6. What the fourth pass closed
 
@@ -594,27 +615,80 @@ and `src/systems/scoring.js`.
 enemy is worth, the bonus ladder, the board — is the part a passer-by sees before deciding to play,
 and none of it existed. `TitleScene` is now that loop, with every figure on the value chart read
 from `scoreFor()` at draw time so the chart cannot drift from the table it documents. Demo play, the
-one part of the attract cycle where the machine plays itself, is still not implemented.
+one part of the attract cycle where the machine plays itself, is still not implemented — it is closed
+by the fifth pass, in section 7.
 
-## 7. Overall verdict
+## 7. What the fifth pass closed
+
+The fourth pass ended with a list of four things it had not done. This pass did all four.
+
+**Demo play.** The attract loop showed four static panels and never demonstrated anything,
+which is the half of the cabinet's attract cycle that actually sells the game. The machine
+now plays itself: after the board panel, `TitleScene` hands the screen to `GameScene` with
+`demo: true`, and the fighter is flown by `demoInput` in `src/systems/demo.js` -- a pure
+function of the board that dodges what is falling at it, leaves an open tractor beam, and
+otherwise lines up on the lowest enemy and fires. It is subject to every rule a player is,
+including the two-shot limit; it never writes to the score table; any start button takes the
+game off it mid-run, which is what a cabinet does. Seventeen tests fly the pilot without a
+canvas.
+
+**The caravan table.** "Three entrance patterns" was a strategy guide describing what a
+player can *tell apart*; the ROM holds thirteen caravan rows of eighteen bytes and a
+rank-indexed table that selects between them. `src/systems/caravans.js` is that table in the
+arcade's own encoding, path byte for path byte -- shape in bits 0-5, mirror in bit 6, launch
+gate in bit 7 -- with the cabinet's real stage-1 row as row 0. The three hard-coded
+`{curves, paired}` patterns that used to live in `formation.js` are gone: the both-sides
+entrance is no longer a special case in code, it is what `0x00 / 0xC0` decodes to. The six
+fly-in shapes in `paths.js` are authored as left-hand approaches and mirrored by the bit, so
+one shape serves both sides and cannot drift out of symmetry with itself.
+
+**The rank dimension.** The arcade's difficulty is DIP-selected, A to D, and it is the reason
+"stage 1 does not bomb" is true on a factory machine and false on a hard one.
+`stageDifficulty(stage, rank)` takes the rank, `enemiesBomb` and `captureAllowed` take the
+rank, and the caravan a stage flies takes the rank. It is set from the attract screen with
+`R` and stored like a machine setting rather than carried in a game, because that is what it
+is. The 26-row-per-rank parameter table is deliberately not ported; see the remainder list.
+
+**Two-player alternating play.** The `1UP` had been blinking over a `2UP` column that could
+never fill. `src/systems/players.js` is the session: two players, each with their own score,
+ships, stage, round and accuracy, and one rule -- `loseShip` -- that spends the life, retires
+the player when it was their last, and hands the machine to whoever is left. `GameScene`
+banks the live game into the outgoing player's record, tears the board down, and restarts the
+incoming player's *own* stage; the blink follows whoever is actually flying rather than
+whoever the session has already moved on to. The results screen reports both runs side by
+side and asks each qualifying player for initials in turn, re-ranking between them so nobody
+is asked for three letters that a better score has already pushed off the board.
+
+**And it was watched running.** The fourth pass admitted it had never seen its own changes in
+a browser. This one drove a headless Chromium through the attract loop, a two-player start, a
+handover, a full demo run and the two-name results screen. That caught two things unit tests
+could not: the attract screen's bottom line was clipped off the canvas, and for the second and
+a half between a death and the handover the incoming player's column showed the outgoing
+player's score. Both are fixed. `docs/screenshots/demo-play.png` and
+`docs/screenshots/two-player.png` are from that session.
+
+## 8. Overall verdict
 
 The numbers were right from the start and everything else has since caught up. Every
 constant that can be looked up in a strategy guide — scoring, extra lives, formation
 composition, challenging-stage cadence, flag denominations, bullet limits, boss hit
 points — is authentic and unit tested, and so are the behaviours that were originally
-missing: a fixed entrance pattern per stage flown as five flights of eight, dive-only
-bombing, an eight-bomb ceiling, a low tractor beam, the diving-captor rescue rule, a
-captive that bombs on its captor's dive and swoops at the player when it is lost, a dual
-fighter that is a real target, eight challenging patterns in five waves of eight, the
-Scorpion / Spy Ship / Flagship transform cycle priced per set of three, and per-rank
-enemy audio over a background pulse.
+missing: a caravan per stage flown as five flights of eight, dive-only bombing, an
+eight-bomb ceiling, a low tractor beam, the diving-captor rescue rule, a captive that bombs
+on its captor's dive and swoops at the player when it is lost, a dual fighter that is a real
+target, eight challenging patterns in five waves of eight, the Scorpion / Spy Ship /
+Flagship transform cycle, per-rank enemy audio over a background pulse, an attract cycle
+that ends in the machine playing itself, an operator difficulty rank, and two players
+taking turns.
 
-What remains is listed at the end of section 1 and is narrower than what it replaced:
-the stage-to-entrance-pattern mapping is an assumption on top of a sourced rule, one
-sound file is placed by inference, and every sprite is original pixel art drawn to
-published descriptions rather than the ROM's own. None of the three is a rule error.
+What remains is listed at the end of section 1 and is narrower again than what it replaced:
+twelve of the thirteen caravan rows are authored in the arcade's encoding rather than read
+out of it, the rank is the right dimension at the wrong resolution, one sound is placed by
+inference, and every sprite is original pixel art drawn to published descriptions rather
+than the ROM's own. None of them is a rule error, and every one of them is a statement about
+data this project could not obtain rather than about behaviour it declined to implement.
 
-The rules layer that carries all of this is 244 unit tests across ten Phaser-free
+The rules layer that carries all of this is 424 unit tests across fourteen Phaser-free
 modules. Against the five clones surveyed in section 3 — four with no tests at all and
 one with a single screen-state test — that is the part of this repo least likely to be
 matched.

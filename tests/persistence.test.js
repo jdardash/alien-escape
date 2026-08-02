@@ -17,7 +17,11 @@ import {
   qualifiesForScoreTable,
   insertScoreEntry,
   recordScore,
+  loadRank,
+  saveRank,
+  RANK_KEY,
 } from '../src/systems/persistence.js';
+import { DifficultyRank } from '../src/systems/caravans.js';
 
 describe('loading', () => {
   it('reads zero when nothing has been stored', () => {
@@ -317,5 +321,48 @@ describe('a board inherited from a build that had no board', () => {
     });
 
     expect(loadScoreTable(storage)[0]).toEqual({ name: 'JOS', score: 90000 });
+  });
+});
+
+/**
+ * The operator's difficulty rank.
+ *
+ * Stored like a machine setting rather than carried in a game: a real cabinet
+ * keeps it on a DIP switch inside the box, so it survives a reload and applies
+ * to whoever plays next.
+ */
+describe('the difficulty rank', () => {
+  it('comes up at the factory rank on a machine nobody has set', () => {
+    expect(loadRank(createMemoryStorage())).toBe(DifficultyRank.A);
+  });
+
+  it('remembers what it was set to', () => {
+    const storage = createMemoryStorage();
+    saveRank(storage, DifficultyRank.C);
+    expect(loadRank(storage)).toBe(DifficultyRank.C);
+  });
+
+  it('returns the rank in effect, so a caller need not read it back', () => {
+    expect(saveRank(createMemoryStorage(), DifficultyRank.D)).toBe(DifficultyRank.D);
+  });
+
+  it('clamps anything stored outside the four ranks', () => {
+    expect(loadRank(createMemoryStorage({ [RANK_KEY]: '9' }))).toBe(DifficultyRank.D);
+    expect(loadRank(createMemoryStorage({ [RANK_KEY]: '-2' }))).toBe(DifficultyRank.A);
+    expect(loadRank(createMemoryStorage({ [RANK_KEY]: 'hard' }))).toBe(DifficultyRank.A);
+  });
+
+  it('comes up playable rather than hard when storage throws', () => {
+    const broken = {
+      getItem() {
+        throw new Error('blocked');
+      },
+      setItem() {
+        throw new Error('blocked');
+      },
+    };
+
+    expect(loadRank(broken)).toBe(DifficultyRank.A);
+    expect(() => saveRank(broken, DifficultyRank.D)).not.toThrow();
   });
 });

@@ -72,9 +72,18 @@ import {
   challengingPatternIndex,
   challengingRoster,
   transformTypeFor,
-  entrancePatternFor,
+  caravanFor,
+  RANK_NAMES,
   nextStage,
 } from '../systems/stages.js';
+import {
+  createSession,
+  activePlayer,
+  withActive,
+  loseShip,
+  playerLabel,
+} from '../systems/players.js';
+import { demoInput, DEMO_DURATION_MS } from '../systems/demo.js';
 import {
   CaptureState,
   CaptureEvent,
@@ -86,7 +95,7 @@ import {
   bulletLimit,
   captiveCanBomb,
 } from '../systems/capture.js';
-import { resolveStorage, loadScoreTable } from '../systems/persistence.js';
+import { resolveStorage, loadScoreTable, loadRank } from '../systems/persistence.js';
 import {
   createFlagTextures,
   createShipTextures,
@@ -96,9 +105,11 @@ import {
   FLAG_DRAWN_WIDTH,
 } from '../art/textures.js';
 import { applyShipArt, queueLocalArt } from '../art/localArt.js';
-import { createStats, recordShot, recordHit } from '../systems/stats.js';
+import { installSoundBank } from '../audio/soundBank.js';
+import { queueLocalAudio } from '../audio/localAudio.js';
+import { recordShot, recordHit } from '../systems/stats.js';
 import {
-  SOUND_FILES,
+  SOUND_NAMES,
   challengeResultSound,
   deathSoundFor,
   playerShotSound,
@@ -132,28 +143,44 @@ export class GameScene extends Phaser.Scene {
     // Absent, this is one 404 and the drawn ships are used.
     queueLocalArt(this);
 
-    // One manifest, in `src/systems/audio.js`, so that the set of sounds that
-    // exist and the rules for choosing between them cannot drift apart.
-    for (const [key, path] of Object.entries(SOUND_FILES)) {
-      this.load.audio(key, path);
-    }
+    // The same arrangement for audio, and the only thing loaded for it. Every
+    // sound is synthesised in `create`; this probe is the one way the cabinet's
+    // own samples can get in, and only on a machine that already has them.
+    queueLocalAudio(this);
+  }
+
+  /**
+   * How this game was started.
+   *
+   * Three things arrive from outside: how many players pressed start, whether
+   * this is the attract screen playing itself, and the operator's difficulty
+   * rank. All three have defaults, so `scene.start('GameScene')` with nothing
+   * at all is a one-player game at the factory rank -- which is what the
+   * results screen's "play again" does.
+   */
+  init(data) {
+    this.demo = data?.demo === true;
+    this.storage = resolveStorage(globalThis.localStorage);
+    // The demo is not a game the operator's settings apply to: it is the
+    // machine showing what the game looks like, and it should look like the one
+    // a new player would get.
+    this.rank = this.demo ? 0 : loadRank(this.storage);
+
+    this.session = createSession({
+      playerCount: this.demo ? 1 : (data?.playerCount ?? 1),
+      startingLives: PLAYER.startingLives,
+    });
   }
 
   create() {
-    this.storage = resolveStorage(globalThis.localStorage);
-
-    this.score = 0;
+    // The live copies of the active player's game. They are held here rather
+    // than read out of the session every frame because they change many times a
+    // second; `bankTurn` folds them back when the turn ends.
+    this.loadTurn();
     // The number in the HUD is the top of the board, not a second high score
     // kept beside it. A cabinet whose header disagreed with its own BEST 5
     // would be showing one of the two wrong.
     this.highScore = loadScoreTable(this.storage)[0].score;
-    this.lives = PLAYER.startingLives;
-    this.stage = 1;
-    // Stages *played*, which is not the same as the stage number once the
-    // counter has rolled over past 255. Difficulty is driven from this so a
-    // player who gets that far is not handed the opening round back.
-    this.round = 1;
-    this.stats = createStats();
     this.captureState = CaptureState.IDLE;
     this.shotIndex = 0;
 
@@ -181,7 +208,104 @@ export class GameScene extends Phaser.Scene {
     // Brief grace on the opening spawn so the arriving wave cannot land a hit
     // before the player has had a chance to move.
     this.makeInvulnerable(PLAYER.invulnerableMs);
+
+    if (this.demo) this.beginDemo();
+
+    // A two-player game says whose turn it is before the first wave, the way
+    // the cabinet does. A one-player game does not, because there is nobody to
+    // distinguish it from.
+    if (this.session.playerCount > 1) {
+      this.showBanner(playerLabel(this.session.active), 1500);
+      this.time.delayedCall(1500, () => {
+        if (!this.isGameOver) this.beginStage(this.stage);
+      });
+      return;
+    }
+
     this.beginStage(this.stage);
+  }
+
+  // ------------------------------------------------------------------ turns
+
+  /**
+   * Load the active player's game into the live fields.
+   *
+   * Two-player Galaga is alternating, so everything the machine tracks it
+   * tracks twice and swaps the pair over at a handover. This is that swap in
+   * one direction; `bankTurn` is the other.
+   */
+  loadTurn() {
+    const player = activePlayer(this.session);
+
+    // Which player the live fields below belong to. It is not always the
+    // session's active player: `loseShip` hands the machine over at the instant
+    // a ship is destroyed, but the outgoing player's ship is still exploding
+    // and their score is still in `this.score` for another second and a half.
+    // Without this the HUD spent that second showing the dying player's score
+    // in the incoming player's column.
+    this.turnOwner = player.index;
+
+    this.score = player.score;
+    this.lives = player.lives;
+    this.stage = player.stage;
+    // Stages *played*, which is not the same as the stage number once the
+    // counter has rolled over past 255. Difficulty is driven from this so a
+    // player who gets that far is not handed the opening round back.
+    this.round = player.round;
+    this.stats = player.stats;
+  }
+
+  /** Fold the live fields back into the active player's record. */
+  bankTurn() {
+    this.session = withActive(this.session, {
+      score: this.score,
+      lives: this.lives,
+      stage: this.stage,
+      round: this.round,
+      stats: this.stats,
+    });
+  }
+
+  /**
+   * Hand the machine to the other player.
+   *
+   * Everything on the board belongs to the outgoing player, so all of it goes:
+   * the formation, whatever was diving, any beam, and any capture in progress.
+   * The incoming player restarts their *own* stage from its opening wave, which
+   * is what the arcade does -- a turn is a stage attempt, and the stage the
+   * other player was half way through is none of their business.
+   */
+  handOverTurn() {
+    this.clearTimers();
+    this.stageAdvanceTimer?.remove();
+    this.stageAdvanceTimer = null;
+    // Held until `beginStage` clears it. Without it the empty board left by the
+    // teardown below reads as a cleared stage, and the incoming player is
+    // credited with finishing the stage the outgoing one died on.
+    this.stageResolving = true;
+
+    this.enemies.clear(true, true);
+    this.enemyBullets.clear(true, true);
+    this.bullets.clear(true, true);
+    this.clearCaptive();
+    this.clearDualFighter();
+    this.clearBeam();
+    this.captor = null;
+    this.captureState = CaptureState.IDLE;
+    this.sfx.enemyDive.stop();
+
+    this.loadTurn();
+    this.refreshHud();
+
+    this.player.enableBody(true, SCREEN.width / 2, PLAYER.y, true, true);
+    this.player.setAngle(0);
+    this.makeInvulnerable(PLAYER.invulnerableMs);
+
+    this.showBanner(playerLabel(this.session.active), 1600);
+    this.time.delayedCall(1600, () => {
+      if (this.isGameOver) return;
+      this.beginStage(this.stage);
+    });
   }
 
   // ------------------------------------------------------------------ setup
@@ -193,9 +317,13 @@ export class GameScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setTileScale(BACKGROUND_TILE_SCALE);
 
-    this.sfx = Object.fromEntries(
-      Object.keys(SOUND_FILES).map((key) => [key, this.sound.add(key)]),
-    );
+    // Synthesised into the audio cache here, in `create`, rather than fetched
+    // in `preload`: nothing is downloaded, and by now the loader has finished,
+    // so anything a local checkout supplied is already in the cache and is
+    // left where it is. See `src/audio/soundBank.js`.
+    installSoundBank(this);
+
+    this.sfx = Object.fromEntries(SOUND_NAMES.map((key) => [key, this.sound.add(key)]));
 
     // Galaga plays a low pulse under the whole board. It is the thing that
     // makes a cleared screen feel quiet, so it runs for as long as the scene
@@ -237,40 +365,78 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * The cabinet's own header: a blinking 1UP over the running score on the
-   * left, HIGH SCORE over the board's best in the middle.
+   * The cabinet's own header: 1UP over one running score on the left, HIGH
+   * SCORE over the board's best in the middle, 2UP over the other on the right.
    *
-   * The blink is not decoration. On a two-player cabinet it marks whose turn is
-   * live, and it is the one piece of motion in an otherwise static header, so a
-   * screen with nothing flying on it still reads as a machine that is on.
+   * The blink is not decoration -- it marks whose turn is live. Which is why
+   * only the column belonging to the player currently flying blinks, and why in
+   * a one-player game the 2UP column is drawn dim and empty: that is exactly
+   * what a two-player cabinet looks like when one person is playing, and it is
+   * what gives the blink on the left something to mean.
    */
   createHud() {
     const heading = { font: '15px monospace', fill: '#ff4444' };
     const value = { font: '18px monospace', fill: '#ffffff' };
+    const idle = '#663333';
 
-    const oneUp = this.add.text(20, 12, '1UP', heading).setDepth(20);
-    this.tweens.add({ targets: oneUp, alpha: 0.15, duration: 500, yoyo: true, repeat: -1 });
+    this.playerHeadings = [
+      this.add.text(20, 12, '1UP', heading).setDepth(20),
+      this.add
+        .text(SCREEN.width - 20, 12, '2UP', heading)
+        .setOrigin(1, 0)
+        .setDepth(20),
+    ];
 
     this.add
       .text(SCREEN.width / 2, 12, 'HIGH SCORE', heading)
       .setOrigin(0.5, 0)
       .setDepth(20);
 
-    // The right-hand column the cabinet keeps for the second player. This build
-    // is one-player, so it is drawn dim and empty rather than blinking: that is
-    // what a two-player cabinet mid-way through a one-player game looks like,
-    // and it is what gives the blinking 1UP on the left something to mean.
-    this.add
-      .text(SCREEN.width - 20, 12, '2UP', { ...heading, fill: '#663333' })
-      .setOrigin(1, 0)
-      .setDepth(20);
+    this.playerScores = [
+      this.add.text(20, 32, '', value).setDepth(20),
+      this.add
+        .text(SCREEN.width - 20, 32, '', value)
+        .setOrigin(1, 0)
+        .setDepth(20),
+    ];
 
-    this.add
-      .text(SCREEN.width - 20, 32, '', { ...value, fill: '#555555' })
-      .setOrigin(1, 0)
-      .setDepth(20);
+    // One blink tween per column, both created up front and paused: a handover
+    // moves the blink by pausing one and resuming the other, so the tweens are
+    // never rebuilt and the two can never end up blinking together.
+    this.playerBlinks = this.playerHeadings.map((text) =>
+      this.tweens.add({
+        targets: text,
+        alpha: 0.15,
+        duration: 500,
+        yoyo: true,
+        repeat: -1,
+        paused: true,
+      }),
+    );
 
-    this.scoreText = this.add.text(20, 32, '', value).setDepth(20);
+    if (this.session.playerCount < 2) {
+      this.playerHeadings[1].setColor(idle);
+      this.playerScores[1].setColor('#555555');
+    }
+
+    // The rank the operator left the machine on. Drawn small and out of the
+    // way, because on a real cabinet it is not on the screen at all -- it is a
+    // switch inside the box -- but a browser has no box, and a player who has
+    // set it to D deserves to be told why the first screen is shooting at them.
+    if (this.rank > 0) {
+      this.add
+        .text(SCREEN.width / 2, 54, `RANK ${RANK_NAMES[this.rank]}`, {
+          font: '12px monospace',
+          fill: '#886644',
+        })
+        .setOrigin(0.5, 0)
+        .setDepth(20);
+    }
+
+    // Which column is currently blinking, so that `refreshHud` -- which runs on
+    // every point scored -- can leave a running tween alone instead of
+    // restarting it several times a second.
+    this.blinkingColumn = -1;
     this.highScoreText = this.add
       .text(SCREEN.width / 2, 32, '', { ...value, fill: '#ffcc00' })
       .setOrigin(0.5, 0)
@@ -300,6 +466,15 @@ export class GameScene extends Phaser.Scene {
       altRight: 'RIGHT',
     });
 
+    // During a demo the controls belong to the machine, and the only thing a
+    // key does is what it does on a cabinet mid-attract: start a real game.
+    if (this.demo) {
+      this.input.keyboard.once('keydown-SPACE', () => this.startRealGame(1));
+      this.input.keyboard.once('keydown-ONE', () => this.startRealGame(1));
+      this.input.keyboard.once('keydown-TWO', () => this.startRealGame(2));
+      return;
+    }
+
     // Movement is a held state and is read per frame; firing is an event.
     // Polling `JustDown` for the trigger loses any press that begins and ends
     // inside one frame, and tapping faster than the refresh rate is exactly
@@ -308,6 +483,100 @@ export class GameScene extends Phaser.Scene {
     this.input.keyboard.on('keydown-SPACE', (event) => {
       if (!event.repeat) this.fire();
     });
+  }
+
+  // ------------------------------------------------------------------- demo
+
+  /**
+   * Put the machine in charge of the fighter.
+   *
+   * The demo is a real game of Galaga in every respect except who is holding
+   * the stick: the same stages, the same formation, the same capture, the same
+   * scoring. What changes is that `updatePlayer` reads `demoInput` instead of
+   * the keyboard, that the screen says so, and that nothing about it is ever
+   * written to the score table -- a machine that put its own demo on the board
+   * would be filling the board with itself.
+   */
+  beginDemo() {
+    // Well clear of the row the fighter flies in: the machine's own ship spends
+    // the whole demo travelling along the bottom of the screen, and text behind
+    // it is text nobody can read.
+    this.demoLabel = this.add
+      .text(SCREEN.width / 2, SCREEN.height * 0.72, 'DEMO PLAY', {
+        font: '20px monospace',
+        fill: '#ffcc00',
+      })
+      .setOrigin(0.5)
+      .setDepth(30);
+
+    this.tweens.add({
+      targets: this.demoLabel,
+      alpha: 0.25,
+      duration: 800,
+      yoyo: true,
+      repeat: -1,
+    });
+
+    this.add
+      .text(SCREEN.width / 2, SCREEN.height * 0.72 + 28, 'PUSH START BUTTON   1P: SPACE   2P: 2', {
+        font: '14px monospace',
+        fill: '#8899bb',
+      })
+      .setOrigin(0.5)
+      .setDepth(30);
+
+    this.demoTimer = this.time.delayedCall(DEMO_DURATION_MS, () => this.endDemo());
+  }
+
+  /** Hand the screen back to the attract loop. */
+  endDemo() {
+    if (!this.demo) return;
+    this.demo = false;
+    this.isGameOver = true;
+    this.clearTimers();
+    this.sound.stopAll();
+    this.scene.start('TitleScene');
+  }
+
+  /** Someone pressed start while the machine was playing: give them the game. */
+  startRealGame(playerCount) {
+    if (!this.demo) return;
+    this.demo = false;
+    this.isGameOver = true;
+    this.demoTimer?.remove();
+    this.clearTimers();
+    this.sound.stopAll();
+    this.sound.play('coin', { volume: 0.5 });
+    this.scene.start('GameScene', { playerCount });
+  }
+
+  /**
+   * The board as the demo pilot sees it.
+   *
+   * Deliberately narrow: positions and nothing else. The pilot is a pure
+   * function of this, which is what lets `tests/demo.test.js` fly it without a
+   * canvas, and it is why the pilot cannot cheat by reading a timer or a
+   * random seed the player has no access to.
+   */
+  demoBoard() {
+    return {
+      playerX: this.player.x,
+      playerY: this.player.y,
+      screenWidth: SCREEN.width,
+      margin: SHIP_DRAWN_PX / 2,
+      bombs: this.enemyBullets
+        .getChildren()
+        .filter((bullet) => bullet.active)
+        .map((bullet) => ({ x: bullet.x, y: bullet.y })),
+      targets: this.enemies
+        .getChildren()
+        .filter((enemy) => enemy.active)
+        .map((enemy) => ({ x: enemy.x, y: enemy.y })),
+      beam:
+        this.beam && isBeamDangerous(this.captureState)
+          ? { x: this.beam.x, width: CAPTURE.beamWidth }
+          : null,
+    };
   }
 
   registerCollisions() {
@@ -381,7 +650,7 @@ export class GameScene extends Phaser.Scene {
     this.stageResolving = false;
     this.formationElapsed = 0;
     this.challengingHits = 0;
-    this.difficulty = stageDifficulty(this.round);
+    this.difficulty = stageDifficulty(this.round, this.rank);
     this.challenging = isChallengingStage(stage);
     this.transformType = transformTypeFor(stage);
 
@@ -434,14 +703,18 @@ export class GameScene extends Phaser.Scene {
     // wave bombs on its way in.
     const entryFire = enemiesFireDuringEntry(this.stage);
     const slots = buildFormationSlots();
-    const groups = buildEntryGroups(entrancePatternFor(this.stage));
+    // The caravan is a property of the stage *and* the operator's rank, which
+    // is the arcade's own `d_combat_stg_dat_idx[rank * 17 + row]`. Every member
+    // carries the shape it flies, whether that shape is mirrored, and the beat
+    // it launches on, all decoded out of the row's path bytes.
+    const groups = buildEntryGroups(caravanFor(this.stage, this.rank));
 
     groups.forEach((group) => {
       const groupDelay = group.index * FORMATION.groupIntervalMs;
 
-      group.members.forEach(({ slotIndex, pathVariant, step }) => {
+      group.members.forEach(({ slotIndex, pathVariant, mirrored, step }) => {
         const slot = slots[slotIndex];
-        const start = entryPath(pathVariant, this.slotPosition(slot), SCREEN)[0][0];
+        const start = entryPath(pathVariant, this.slotPosition(slot), SCREEN, mirrored).points[0];
         const enemy = createEnemy(this, this.enemies, slot, start);
         enemy.willBomb = entryFire && Math.random() < 0.25;
 
@@ -451,7 +724,7 @@ export class GameScene extends Phaser.Scene {
           // seconds after the first, by which time the formation has breathed
           // and swayed away from where its slots were.
           enemy.flight = createFlight(
-            entryPath(pathVariant, this.slotPosition(slot), SCREEN),
+            entryPath(pathVariant, this.slotPosition(slot), SCREEN, mirrored),
             FORMATION.entryDurationMs,
           );
         });
@@ -646,9 +919,10 @@ export class GameScene extends Phaser.Scene {
         y: origin.y,
       };
       const enemy = createTransformEnemy(this, this.enemies, this.transformType, start, set);
-      enemy.willBomb = enemiesBomb(this.stage) && Math.random() < DIVE.bombChance;
+      enemy.willBomb =
+        enemiesBomb(this.stage, this.rank) && Math.random() < this.difficulty.bombChance;
       enemy.flight = createFlight(
-        divePath(start, this.player.x, SCREEN),
+        divePath(start, this.player.x, SCREEN, { stageIndex: this.round }),
         TRANSFORM.runDurationMs,
       );
     }
@@ -717,9 +991,15 @@ export class GameScene extends Phaser.Scene {
     // Stage 1 is unarmed in the arcade: the opening round's difficulty row has
     // its bomb-drop flags at zero, so the only way to lose a ship on the first
     // screen is to be flown into.
-    enemy.willBomb = enemiesBomb(this.stage) && Math.random() < DIVE.bombChance;
+    enemy.willBomb =
+        enemiesBomb(this.stage, this.rank) && Math.random() < this.difficulty.bombChance;
+    // Which block the dive flies and how hot comes from the per-stage flight
+    // vectors, the arcade's own per-type selection.
     enemy.flight = createFlight(
-      divePath({ x: enemy.x, y: enemy.y }, this.player.x, SCREEN),
+      divePath({ x: enemy.x, y: enemy.y }, this.player.x, SCREEN, {
+        enemyType: enemy.enemyType,
+        stageIndex: this.round,
+      }),
       DIVE.durationMs / this.difficulty.diveSpeed,
     );
   }
@@ -730,7 +1010,7 @@ export class GameScene extends Phaser.Scene {
     // Two gates the arcade applies and a clock cannot: the stage has to allow
     // captures at all, and there has to be enough formation left for hunting
     // the captor down to be a plan the player can act on.
-    if (!captureAllowed(this.stage, this.enemies.countActive(true))) return;
+    if (!captureAllowed(this.stage, this.enemies.countActive(true), this.rank)) return;
 
     const bosses = this.enemies
       .getChildren()
@@ -1176,17 +1456,47 @@ export class GameScene extends Phaser.Scene {
     this.loseLife();
   }
 
+  /**
+   * The active player lost a ship.
+   *
+   * In a one-player game this is what it always was: spend a life, respawn, or
+   * end the game. In a two-player game it is also the moment the machine
+   * changes hands, so the whole decision is deferred to `loseShip` in
+   * `players.js` and this reads the answer off it. The three outcomes are
+   * different sentences on the screen -- another ship, `GAME OVER PLAYER 1`
+   * while player two carries on, or the results screen -- and nothing here
+   * decides which; it only draws them.
+   */
   loseLife() {
-    this.lives -= 1;
+    // Read before the session moves on: this is the player who just died, and
+    // by the time `loseShip` has returned, the machine may already belong to
+    // somebody else.
+    const flyer = this.session.active;
+
+    this.bankTurn();
+    const outcome = loseShip(this.session);
+    this.session = outcome.session;
+    this.lives = Math.max(this.lives - 1, 0);
     this.refreshHud();
 
-    if (this.lives <= 0) {
+    if (outcome.over) {
       this.endGame();
       return;
     }
 
+    // One player is finished but the other is not. Say so, because otherwise
+    // the handover looks like an ordinary change of turn and the player who is
+    // out never learns that they are.
+    if (outcome.retired) {
+      this.showBanner(`GAME OVER\n${playerLabel(flyer)}`, 1800);
+    }
+
     this.time.delayedCall(PLAYER.respawnDelayMs, () => {
       if (this.isGameOver) return;
+      if (outcome.handedOver) {
+        this.handOverTurn();
+        return;
+      }
       this.respawnPlayer();
     });
   }
@@ -1231,6 +1541,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   endGame() {
+    this.bankTurn();
     this.isGameOver = true;
     this.clearTimers();
     // The board goes quiet before the results screen speaks. The attack-run
@@ -1239,6 +1550,15 @@ export class GameScene extends Phaser.Scene {
     this.sfx.ambient.stop();
     this.sfx.enemyDive.stop();
 
+    // The machine's own game does not get a results screen and never touches
+    // the board: an attract loop that could write to the high-score table would
+    // eventually fill it with itself.
+    if (this.demo) {
+      this.demoTimer?.remove();
+      this.time.delayedCall(1600, () => this.endDemo());
+      return;
+    }
+
     this.time.delayedCall(1200, () => {
       // The score is banked by the results screen, not here: it is the screen
       // that asks for initials, and a run that made the board has to be written
@@ -1246,11 +1566,7 @@ export class GameScene extends Phaser.Scene {
       // what it always was -- bullets already in the air still land during it,
       // and banking early left the results screen showing a score above its own
       // high score.
-      this.scene.start('GameOverScene', {
-        score: this.score,
-        stage: this.stage,
-        stats: this.stats,
-      });
+      this.scene.start('GameOverScene', { session: this.session });
     });
   }
 
@@ -1385,8 +1701,20 @@ export class GameScene extends Phaser.Scene {
   updatePlayer() {
     if (!this.player.active) return;
 
-    const left = this.keys.left.isDown || this.keys.altLeft.isDown;
-    const right = this.keys.right.isDown || this.keys.altRight.isDown;
+    // In a demo the stick is held by `demoInput`, which is a pure function of
+    // the board and lives in `src/systems/demo.js`. It drives the same fields a
+    // player's keys drive, so nothing downstream of here knows the difference --
+    // the demo is subject to the two-shot limit, the beam and everything else.
+    const held = this.demo
+      ? demoInput(this.demoBoard())
+      : {
+          left: this.keys.left.isDown || this.keys.altLeft.isDown,
+          right: this.keys.right.isDown || this.keys.altRight.isDown,
+          fire: false,
+        };
+
+    const { left, right } = held;
+    if (held.fire) this.fire();
     this.player.setVelocityX(((right ? 1 : 0) - (left ? 1 : 0)) * PLAYER.speed);
 
     // World bounds stop the *body*, which is deliberately narrower than the
@@ -1526,10 +1854,38 @@ export class GameScene extends Phaser.Scene {
   }
 
   refreshHud() {
-    this.scoreText.setText(String(this.score));
+    this.drawScores();
     this.highScoreText.setText(String(this.highScore));
     this.drawLives();
     this.drawFlags();
+  }
+
+  /**
+   * Both score columns, and the blink that says which of them is live.
+   *
+   * The active player's column reads the live score; the other reads whatever
+   * was banked when their turn ended, so a player watching their opponent can
+   * see exactly how far ahead they need to get.
+   */
+  drawScores() {
+    this.session.players.forEach((player, index) => {
+      const live = index === this.turnOwner;
+      this.playerScores[index].setText(String(live ? this.score : player.score));
+    });
+
+    // The blink follows the ship, not the session: it marks who is flying, and
+    // through the pause after a death nobody has taken over yet.
+    if (this.blinkingColumn === this.turnOwner) return;
+    this.blinkingColumn = this.turnOwner;
+
+    this.playerBlinks.forEach((blink, index) => {
+      if (index === this.turnOwner) {
+        blink.restart();
+        return;
+      }
+      blink.pause();
+      this.playerHeadings[index].setAlpha(1);
+    });
   }
 
   drawLives() {

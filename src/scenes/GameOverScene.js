@@ -25,13 +25,36 @@ export class GameOverScene extends Phaser.Scene {
   }
 
   init(data) {
-    this.finalScore = data?.score ?? 0;
-    this.stageReached = data?.stage ?? 1;
-    this.stats = data?.stats ?? createStats();
+    // A two-player game arrives as a session and has to be reported twice, so
+    // everything below works from a list of results rather than from one set of
+    // numbers. A one-player game is a list of one, and a call carrying the old
+    // single-player shape still produces a drawable screen.
+    this.results = (
+      data?.session?.players ?? [
+        { index: 0, score: data?.score ?? 0, stage: data?.stage ?? 1, stats: data?.stats },
+      ]
+    ).map((player) => ({
+      index: player.index ?? 0,
+      score: player.score ?? 0,
+      stage: player.stage ?? 1,
+      stats: player.stats ?? createStats(),
+    }));
+
+    this.twoPlayer = this.results.length > 1;
 
     this.storage = resolveStorage(globalThis.localStorage);
     this.table = loadScoreTable(this.storage);
-    this.rank = scoreTableRank(this.table, this.finalScore);
+
+    // Both players are ranked against the board as it stands *now*, before
+    // either name is taken. Ranking player two after player one has already
+    // been written would let a good first score push a better second one down.
+    for (const result of this.results) {
+      result.rank = scoreTableRank(this.table, result.score);
+    }
+
+    this.pending = this.results.filter((result) => result.rank !== -1);
+    this.entry = null;
+    this.entered = [];
 
     // Three slots, each an index into the alphabet the cursor walks.
     this.initials = Array.from({ length: NAME_LENGTH }, () => 0);
@@ -43,8 +66,10 @@ export class GameOverScene extends Phaser.Scene {
     this.add.rectangle(0, 0, SCREEN.width, SCREEN.height, 0x000000).setOrigin(0);
 
     // The cabinet plays a different tune for taking first place than for taking
-    // any other place on the board, and a third for not making it at all.
-    if (this.rank === 0) this.sound.play('highScoreEntry', { volume: 0.5 });
+    // any other place on the board, and a third for not making it at all. With
+    // two players it is the better of the two runs that decides which.
+    const best = Math.min(...this.results.map((result) => result.rank).filter((r) => r !== -1));
+    if (best === 0) this.sound.play('highScoreEntry', { volume: 0.5 });
     else this.sound.play('gameOverTune', { volume: 0.5 });
 
     this.add
@@ -55,35 +80,82 @@ export class GameOverScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     this.drawResults();
+    this.nextNameEntry();
+  }
 
-    if (this.rank === -1) {
+  /**
+   * The closing report: shots fired, hits, and the ratio between them.
+   *
+   * Two players get two columns of it rather than two screens, because the
+   * whole point of alternating play is that the two runs are there to be
+   * compared.
+   */
+  drawResults() {
+    const labels = ['SCORE', 'STAGE REACHED', 'SHOTS FIRED', 'HITS', 'HIT-MISS RATIO'];
+
+    labels.forEach((label, index) => {
+      this.add
+        .text(SCREEN.width / 2 - 190, 210 + index * 34, label, {
+          font: '16px monospace',
+          fill: '#8899bb',
+        })
+        .setOrigin(0, 0.5);
+    });
+
+    this.results.forEach((result, column) => {
+      const x = this.twoPlayer ? SCREEN.width / 2 + 45 + column * 145 : SCREEN.width / 2 + 190;
+
+      if (this.twoPlayer) {
+        this.add
+          .text(x, 176, `${result.index + 1}UP`, { font: '15px monospace', fill: '#ff4444' })
+          .setOrigin(1, 0.5);
+      }
+
+      const values = [
+        String(result.score),
+        String(result.stage),
+        String(result.stats.shotsFired),
+        String(result.stats.hits),
+        formatRatio(result.stats),
+      ];
+
+      values.forEach((value, index) => {
+        this.add
+          .text(x, 210 + index * 34, value, { font: '16px monospace', fill: '#ffffff' })
+          .setOrigin(1, 0.5);
+      });
+    });
+  }
+
+  /**
+   * Ask the next player who made the board for their initials, or show the
+   * board once nobody is left to ask.
+   *
+   * They are asked in player order, one at a time, which is what the cabinet
+   * does: two entry panels at once would leave both players pressing the same
+   * three keys.
+   */
+  nextNameEntry() {
+    // Re-ranked against the board as it stands now, not as it stood when the
+    // game ended. With five rows and two players, one player's entry can push
+    // the other off the bottom -- and asking someone for three initials that
+    // are then quietly discarded is worse than not asking.
+    this.pending = this.pending.filter(
+      (result) => scoreTableRank(this.table, result.score) !== -1,
+    );
+
+    this.entry = this.pending.shift() ?? null;
+
+    if (this.entry === null) {
       this.showBoard();
       return;
     }
 
+    this.entry.rank = scoreTableRank(this.table, this.entry.score);
+
+    this.initials = Array.from({ length: NAME_LENGTH }, () => 0);
+    this.slot = 0;
     this.beginNameEntry();
-  }
-
-  drawResults() {
-    const rows = [
-      ['SCORE', String(this.finalScore)],
-      ['STAGE REACHED', String(this.stageReached)],
-      ['SHOTS FIRED', String(this.stats.shotsFired)],
-      ['HITS', String(this.stats.hits)],
-      ['HIT-MISS RATIO', formatRatio(this.stats)],
-    ];
-
-    rows.forEach(([label, value], index) => {
-      const y = 210 + index * 34;
-
-      this.add
-        .text(SCREEN.width / 2 - 150, y, label, { font: '16px monospace', fill: '#8899bb' })
-        .setOrigin(0, 0.5);
-
-      this.add
-        .text(SCREEN.width / 2 + 150, y, value, { font: '16px monospace', fill: '#ffffff' })
-        .setOrigin(1, 0.5);
-    });
   }
 
   // ------------------------------------------------------------ name entry
@@ -103,17 +175,24 @@ export class GameOverScene extends Phaser.Scene {
     // headings and the key hints on screen underneath the board.
     this.panel = [
       this.add
-        .text(SCREEN.width / 2, 430, `YOU PLACED ${this.rank + 1} OF 5`, {
+        .text(SCREEN.width / 2, 430, `YOU PLACED ${this.entry.rank + 1} OF 5`, {
           font: '20px monospace',
           fill: '#ffcc00',
         })
         .setOrigin(0.5),
 
       this.add
-        .text(SCREEN.width / 2, 466, 'ENTER YOUR INITIALS', {
-          font: '15px monospace',
-          fill: '#8899bb',
-        })
+        .text(
+          SCREEN.width / 2,
+          466,
+          this.twoPlayer
+            ? `PLAYER ${this.entry.index + 1} -- ENTER YOUR INITIALS`
+            : 'ENTER YOUR INITIALS',
+          {
+            font: '15px monospace',
+            fill: '#8899bb',
+          },
+        )
         .setOrigin(0.5),
 
       this.add
@@ -143,20 +222,28 @@ export class GameOverScene extends Phaser.Scene {
     // Events rather than per-frame key polling. A key pressed and released
     // inside a single frame never registers as "just down", so polling silently
     // drops fast taps -- and picking three letters is nothing but fast taps.
-    const bind = (keys, handler) => {
-      for (const key of keys) {
-        this.input.keyboard.on(`keydown-${key}`, () => {
-          if (this.entering) handler();
-        });
-      }
-    };
+    //
+    // Bound once for the scene rather than once per entry: with two players
+    // this method runs twice, and a second set of handlers would walk the
+    // alphabet two letters at a time.
+    if (!this.keysBound) {
+      const bind = (keys, handler) => {
+        for (const key of keys) {
+          this.input.keyboard.on(`keydown-${key}`, () => {
+            if (this.entering) handler();
+          });
+        }
+      };
 
-    bind(['W', 'UP'], () => this.cycleLetter(-1));
-    bind(['S', 'DOWN'], () => this.cycleLetter(1));
-    bind(['A', 'LEFT'], () => this.moveSlot(-1));
-    bind(['D', 'RIGHT'], () => this.moveSlot(1));
-    bind(['SPACE'], () => this.acceptSlot());
-    bind(['ENTER'], () => this.submitName());
+      bind(['W', 'UP'], () => this.cycleLetter(-1));
+      bind(['S', 'DOWN'], () => this.cycleLetter(1));
+      bind(['A', 'LEFT'], () => this.moveSlot(-1));
+      bind(['D', 'RIGHT'], () => this.moveSlot(1));
+      bind(['SPACE'], () => this.acceptSlot());
+      bind(['ENTER'], () => this.submitName());
+
+      this.keysBound = true;
+    }
 
     this.entering = true;
     this.refreshNameEntry();
@@ -189,14 +276,20 @@ export class GameOverScene extends Phaser.Scene {
     this.entering = false;
 
     const name = this.initials.map((index) => NAME_ALPHABET[index]).join('');
-    this.table = recordScore(this.storage, { name, score: this.finalScore });
+    this.table = recordScore(this.storage, { name, score: this.entry.score });
 
-    // The entry panel is replaced by the board it just changed, so the player
-    // sees where their name landed rather than being returned to a title
-    // screen and having to go looking for it.
+    // Remembered so the board can pick out this run's rows. The rank worked out
+    // in `init` is the row the score *would* have taken against the board as it
+    // was; once the other player's name has gone in above it, the row it
+    // actually occupies has moved.
+    this.entered.push({ name, score: this.entry.score });
+
+    // The entry panel is replaced by whatever comes next -- the other player's
+    // panel, or the board it just changed -- so a player sees where their name
+    // landed rather than being returned to a title screen to go looking for it.
     this.panel.forEach((object) => object.destroy());
     this.panel = [];
-    this.showBoard();
+    this.nextNameEntry();
   }
 
   refreshNameEntry() {
@@ -223,11 +316,21 @@ export class GameOverScene extends Phaser.Scene {
       .text(SCREEN.width / 2, 430, 'BEST 5', { font: '20px monospace', fill: '#ff4444' })
       .setOrigin(0.5);
 
+    // Rows this game just wrote, matched by what was written rather than by the
+    // rank worked out earlier: with two players the second name goes in against
+    // a board the first one has already changed.
+    const claimed = [...this.entered];
+
     this.table.forEach((entry, index) => {
       const y = 476 + index * 34;
-      // `rank` is -1 for a run that did not make the board, so this picks out
-      // nothing at all in that case rather than needing a second guard.
-      const fill = this.rank === index ? '#ffcc00' : '#ffffff';
+      const mine = claimed.findIndex(
+        (written) => written.name === entry.name && written.score === entry.score,
+      );
+
+      // Removed once matched, so two players who took the same initials with
+      // the same score light up one row each rather than both lighting up two.
+      if (mine !== -1) claimed.splice(mine, 1);
+      const fill = mine !== -1 ? '#ffcc00' : '#ffffff';
 
       this.add
         .text(SCREEN.width / 2 - 150, y, `${index + 1}`, {
@@ -257,7 +360,11 @@ export class GameOverScene extends Phaser.Scene {
     // A frame's delay before the restart key is live, so the same press that
     // locked in the last initial cannot also start the next game.
     this.time.delayedCall(400, () => {
-      this.input.keyboard.once('keydown-SPACE', () => this.scene.start('GameScene'));
+      // Play again means the game that was just played, so a pair who started
+      // two-player get two-player back rather than being dropped into one.
+      this.input.keyboard.once('keydown-SPACE', () =>
+        this.scene.start('GameScene', { playerCount: this.results.length }),
+      );
       this.input.keyboard.once('keydown-T', () => this.scene.start('TitleScene'));
     });
   }

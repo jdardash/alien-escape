@@ -21,19 +21,23 @@ graph TD
     subgraph pure["Pure layer - no Phaser import"]
         CFG["src/config.js<br/>tuning constants"]
         FORM["formation.js"]
+        CARAVAN["caravans.js<br/>the 13 entrance rows"]
         PATHS["paths.js"]
         FLIGHT["flight.js"]
         SCORE["scoring.js"]
         STAGE["stages.js"]
         CAP["capture.js"]
+        PLAY["players.js<br/>two-player turns"]
+        DEMO["demo.js<br/>the attract pilot"]
         PERS["persistence.js"]
         STATS["stats.js"]
-        AUDIO["audio.js"]
+        AUDIO["audio.js<br/>which sound plays when"]
         ART["art/pixelArt.js<br/>every ship, as a pixel grid"]
+        SYNTH["audio/synth.js + soundBank.js<br/>every sound, as a spec"]
     end
 
     subgraph tests["tests/ - vitest, headless"]
-        T["10 test files, 244 tests"]
+        T["17 test files, 424 tests"]
     end
 
     HTML --> MAIN
@@ -48,12 +52,20 @@ graph TD
     GAME --> SCORE
     GAME --> STAGE
     GAME --> CAP
+    GAME --> PLAY
+    GAME --> DEMO
     GAME --> PERS
     GAME --> STATS
+    GAME --> AUDIO
+    GAME --> SYNTH
     TITLE --> PERS
+    TITLE --> SYNTH
     OVER --> STATS
     FLIGHT --> PATHS
     SCORE --> FORM
+    STAGE --> CARAVAN
+    FORM --> CARAVAN
+    AUDIO --> SYNTH
 
     T --> FORM
     T --> PATHS
@@ -316,19 +328,26 @@ npm test        # vitest run
 npm run lint    # eslint .
 ```
 
-244 tests across 10 files, one per pure module. Roughly:
+424 tests across 17 files, one per pure module. Roughly:
 
 | File | Tests | Focus |
 | --- | --- | --- |
-| `tests/persistence.test.js` | 46 | The BEST 5 board: ranking, ties, insertion, initials, corrupt values, missing keys, throwing storage, memory fallback |
-| `tests/stages.test.js` | 39 | Challenging-stage cadence, difficulty ramp and plateau, entrance patterns, the transform cycle, flag denominations, the 255 rollover |
-| `tests/formation.test.js` | 31 | Slot counts and types, grid-to-world placement, breathing phase, centre clamping, entry-flight grouping |
+| `tests/synth.test.js` | 28 | Waveforms, envelopes, note names, exponential glides, a deterministic noise source, and that nothing renders outside [-1, 1] |
+| `tests/soundBank.test.js` | 24 | Every sound audible and distinct, the per-rank cries, the boss survived-vs-died pair, the two looping sounds rejoining without a click |
+| `tests/stages.test.js` | 67 | Challenging-stage cadence, difficulty ramp and plateau, the four difficulty ranks, entrance rows, the transform cycle, flag denominations, the 255 rollover |
+| `tests/persistence.test.js` | 51 | The BEST 5 board and the stored difficulty rank: ranking, ties, insertion, initials, corrupt values, missing keys, throwing storage, memory fallback |
+| `tests/formation.test.js` | 32 | Slot counts and types, grid-to-world placement, breathing phase, centre clamping, entry-flight grouping and launch beats |
 | `tests/capture.test.js` | 29 | State transitions, ignored events, reset, bullet limit, the rescue rule, whether a captive may bomb |
-| `tests/paths.test.js` | 26 | Bezier evaluation, segment-boundary continuity, tangent behaviour, path endpoints, the entry-floor invariant |
-| `tests/pixelArt.test.js` | 24 | Grid parsing, ship sizes, centre-line symmetry, distinct silhouettes, recolours that stay pixel-identical |
-| `tests/scoring.test.js` | 19 | Formation vs diving values, boss escort multipliers, transform sets, extra-life thresholds |
-| `tests/audio.test.js` | 12 | Per-rank death sounds, the alternating gun, and that every file on disk is wired |
+| `tests/pixelArt.test.js` | 29 | Grid parsing, ship sizes, centre-line symmetry, distinct silhouettes, recolours that stay pixel-identical |
+| `tests/paths.test.js` | 29 | Bezier evaluation, segment-boundary continuity, tangent behaviour, path endpoints, mirroring, the entry-floor invariant |
+| `tests/scoring.test.js` | 23 | Formation vs diving values, boss escort multipliers, transform sets, extra-life thresholds |
+| `tests/caravans.test.js` | 20 | The path-byte encoding, the 13 caravan rows, the arcade's stage-1 row byte for byte, the rank-indexed selector |
+| `tests/players.test.js` | 17 | Two-player turns: whose ship, whose score, retiring one player while the other flies on |
+| `tests/demo.test.js` | 17 | The attract pilot: aiming, dodging bombs, leaving an open beam, not chasing across the field |
+| `tests/localArt.test.js` | 17 | Manifest parsing for local sprite overrides, and the damaged-boss tint |
+| `tests/audio.test.js` | 14 | Per-rank death sounds, the alternating gun, and that no audio file is ever committed to the repository |
 | `tests/flight.test.js` | 11 | Delta accumulation, clamping at completion, transform output |
+| `tests/localAudio.test.js` | 9 | Manifest parsing for local sound overrides: unknown names, non-filenames, path traversal |
 | `tests/stats.test.js` | 7 | Ratio math, zero-shot case, formatting |
 
 ### What is covered
@@ -342,6 +361,8 @@ Test style follows the modules: plain values in, assertions on returned values. 
 **Phaser rendering.** Asserting that a sprite drew at a given pixel needs a browser harness, a canvas, and a screenshot baseline. That machinery would test Phaser, not this project, and it would need maintaining every time an asset changed. The value in this codebase is in the rules, so the rules are what is covered.
 
 The artwork is the interesting exception. Because every ship is a pixel grid in `src/art/pixelArt.js` rather than a PNG, the things that actually go wrong with hand-edited sprites are testable without a canvas: `tests/pixelArt.test.js` asserts each ship is symmetric about its centre line, that the four ranks have four different silhouettes, and that a recolour such as the damaged Boss Galaga is pixel-identical to the ship it recolours. What is untested is only the final step, `src/art/textures.js`, which is the one place a grid meets Phaser.
+
+The audio is the same exception for the same reason. Because every sound is a spec in `src/audio/soundBank.js` rather than an mp3, the whole bank can be listened to under Node: `tests/soundBank.test.js` renders all 28 and asserts each is audible, that no two are identical, that the boss's survived-a-hit sound differs from its death, and that the two looping sounds rejoin their own start without a click. Pitch is checked by counting zero crossings, which needs no transform and no browser. What is untested is only `installSoundBank`'s single call into `AudioContext.createBuffer`, and even that is exercised against a stub.
 
 **The scenes themselves.** They are untested by design, which is precisely why the boundary is enforced: the smaller the orchestration layer, the less that untested surface matters. Scene methods are kept to sprite construction, collision registration, timer scheduling, and HUD text. When a scene method starts to contain a rule, that rule belongs in `src/systems/`.
 

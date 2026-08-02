@@ -1,8 +1,10 @@
 import { BACKGROUND_SCROLL_PX, BACKGROUND_TILE_SCALE, SCREEN, SHIP_ART } from '../config.js';
-import { resolveStorage, loadScoreTable } from '../systems/persistence.js';
+import { resolveStorage, loadScoreTable, loadRank, saveRank } from '../systems/persistence.js';
+import { RANK_COUNT, RANK_NAMES } from '../systems/stages.js';
 import { createShipTexture, shipTextureKey } from '../art/textures.js';
 import { applyShipArt, queueLocalArt, usingLocalArt } from '../art/localArt.js';
-import { SOUND_FILES } from '../systems/audio.js';
+import { installSoundBank } from '../audio/soundBank.js';
+import { queueLocalAudio, usingLocalAudio } from '../audio/localAudio.js';
 import { EnemyType } from '../systems/formation.js';
 import {
   scoreFor,
@@ -42,15 +44,27 @@ export class TitleScene extends Phaser.Scene {
     // local one if a local checkout has any; it is a no-op the second time.
     queueLocalArt(this);
 
-    // Loaded here as well as in GameScene: Phaser caches by key, so this is a
-    // no-op the second time, and it means the attract screen has the theme
-    // available on the very first frame.
-    for (const [key, path] of Object.entries(SOUND_FILES)) {
-      this.load.audio(key, path);
-    }
+    // The same arrangement for audio: probed here so the attract theme is
+    // already the local one if a local checkout has any, and a no-op the second
+    // time. It is the only audio request the game ever makes.
+    queueLocalAudio(this);
   }
 
   create() {
+    // Synthesised into the audio cache before anything asks for a sound, and
+    // once for the whole game: GameScene finds the bank already installed. See
+    // `src/audio/soundBank.js`.
+    installSoundBank(this);
+
+    this.storage = resolveStorage(globalThis.localStorage);
+    this.rank = loadRank(this.storage);
+
+    // Enough for either start button. A cabinet counts down what has been paid
+    // in; a browser has nothing to pay in, so this is what an operator would
+    // call a machine set to free play -- the credit line is there because the
+    // screen is wrong without it, not because anything is being charged.
+    this.credits = 2;
+
     this.background = this.add
       .tileSprite(0, 0, SCREEN.width, SCREEN.height, 'background')
       .setOrigin(0)
@@ -82,13 +96,64 @@ export class TitleScene extends Phaser.Scene {
     this.panelTimer = this.time.addEvent({
       delay: PANEL_MS,
       loop: true,
-      callback: () => {
-        this.panelIndex = (this.panelIndex + 1) % this.panels().length;
-        this.showPanel();
-      },
+      callback: () => this.advancePanel(),
     });
 
-    this.input.keyboard.once('keydown-SPACE', () => this.startGame());
+    // 1P START and 2P START, the two buttons on the panel. SPACE is bound to
+    // the first of them as well, because a browser player reaches for it and a
+    // cabinet's "1P START" means nothing to a keyboard.
+    this.input.keyboard.once('keydown-SPACE', () => this.startGame(1));
+    this.input.keyboard.once('keydown-ONE', () => this.startGame(1));
+    this.input.keyboard.once('keydown-TWO', () => this.startGame(2));
+
+    // The DIP switch, which on a real machine is inside the box and is the
+    // operator's business rather than the player's. There is no box here, so it
+    // is on the panel -- and it is stored like a machine setting, so it stays
+    // put across games and reloads.
+    this.input.keyboard.on('keydown-R', () => this.cycleRank());
+  }
+
+  /**
+   * Move the attract loop on one step.
+   *
+   * The demo is a panel like any other as far as this is concerned; what makes
+   * it different is that showing it means handing the screen to `GameScene`,
+   * which is why it is the last thing in the cycle. The scene comes back to a
+   * fresh `TitleScene` afterwards and the loop starts again from the logo,
+   * which is what the cabinet does too.
+   */
+  advancePanel() {
+    this.panelIndex += 1;
+
+    if (this.panelIndex >= this.panels().length) {
+      this.startDemo();
+      return;
+    }
+
+    this.showPanel();
+  }
+
+  /** Hand the screen to the machine to play itself. */
+  startDemo() {
+    this.panelTimer?.remove();
+    this.theme.stop();
+    this.scene.start('GameScene', { demo: true });
+  }
+
+  /**
+   * Step the difficulty rank on by one, wrapping past D.
+   *
+   * Redrawing the current panel is what puts the new rank on screen: the rank
+   * line is part of the chrome, and the chrome is not rebuilt between panels.
+   */
+  cycleRank() {
+    this.rank = saveRank(this.storage, (this.rank + 1) % RANK_COUNT);
+    this.rankText.setText(this.rankLabel());
+  }
+
+  rankLabel() {
+    const suffix = this.rank === 0 ? 'factory' : 'harder';
+    return `RANK ${RANK_NAMES[this.rank]} (${suffix})    R to change`;
   }
 
   /**
@@ -97,11 +162,14 @@ export class TitleScene extends Phaser.Scene {
    */
   drawChrome() {
     this.creditText = this.add
-      .text(20, SCREEN.height - 30, 'CREDIT 1', { font: '16px monospace', fill: '#ffffff' })
+      .text(20, SCREEN.height - 30, `CREDIT ${this.credits}`, {
+        font: '16px monospace',
+        fill: '#ffffff',
+      })
       .setDepth(10);
 
     const prompt = this.add
-      .text(SCREEN.width / 2, SCREEN.height - 74, 'PUSH START BUTTON   (SPACE)', {
+      .text(SCREEN.width / 2, SCREEN.height - 100, 'PUSH START BUTTON', {
         font: '18px monospace',
         fill: '#ffcc00',
       })
@@ -110,12 +178,35 @@ export class TitleScene extends Phaser.Scene {
 
     this.tweens.add({ targets: prompt, alpha: 0.2, duration: 700, yoyo: true, repeat: -1 });
 
-    // A local checkout running the arcade's own sprites should say so on screen,
-    // so a screenshot taken from one is never mistaken for what the repository
-    // ships.
-    if (usingLocalArt()) {
+    // The two start buttons, and what they cost. A cabinet with two credits in
+    // it will take either; this one always has two, because a browser has no
+    // coin slot and a demo nobody can play is not a demo.
+    this.add
+      .text(SCREEN.width / 2, SCREEN.height - 74, '1 PLAYER: SPACE or 1      2 PLAYERS: 2', {
+        font: '14px monospace',
+        fill: '#8899bb',
+      })
+      .setOrigin(0.5)
+      .setDepth(10);
+
+    this.rankText = this.add
+      .text(SCREEN.width / 2, SCREEN.height - 52, this.rankLabel(), {
+        font: '13px monospace',
+        fill: this.rank === 0 ? '#667799' : '#cc8844',
+      })
+      .setOrigin(0.5)
+      .setDepth(10);
+
+    // A local checkout running the arcade's own sprites or samples should say
+    // so on screen, so a screenshot or a recording taken from one is never
+    // mistaken for what the repository ships. Both are named, because they are
+    // overridden independently and "local artwork" over the cabinet's own audio
+    // would be the more misleading of the two labels.
+    const local = [usingLocalArt() && 'artwork', usingLocalAudio() && 'audio'].filter(Boolean);
+
+    if (local.length > 0) {
       this.add
-        .text(SCREEN.width - 20, SCREEN.height - 30, 'local artwork', {
+        .text(SCREEN.width - 20, SCREEN.height - 30, `local ${local.join(' + ')}`, {
           font: '12px monospace',
           fill: '#556677',
         })
@@ -318,14 +409,25 @@ export class TitleScene extends Phaser.Scene {
 
   // ------------------------------------------------------------------ start
 
-  startGame() {
+  /**
+   * Somebody pressed a start button.
+   *
+   * Two players costs two credits, which is why the credit line counts down by
+   * the number of players rather than to zero: a machine with two credits in it
+   * that is given a one-player start still has one left.
+   */
+  startGame(playerCount) {
+    if (this.starting) return;
+    this.starting = true;
+
     // Coin, then the start jingle, then the game -- the cabinet's own order.
     this.panelTimer?.remove();
     this.theme.stop();
-    this.creditText.setText('CREDIT 0');
+    this.credits = Math.max(this.credits - playerCount, 0);
+    this.creditText.setText(`CREDIT ${this.credits}`);
     this.sound.play('coin', { volume: 0.5 });
     this.sound.play('gameStart', { volume: 0.5 });
-    this.time.delayedCall(600, () => this.scene.start('GameScene'));
+    this.time.delayedCall(600, () => this.scene.start('GameScene', { playerCount }));
   }
 
   update() {

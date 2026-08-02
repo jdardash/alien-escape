@@ -393,6 +393,10 @@ scenes got the wiring and nothing else. The suite went from 244 tests to 289.
 
 ### What is still not done
 
+> **All five items below were closed by the fifth pass**, recorded in
+> [`fidelity-report.md` §7](fidelity-report.md). They are kept as written, so the record of what
+> this pass deferred stays legible.
+
 - **Demo play.** The attract loop shows four static panels and does not play itself. That is the
   expensive half of gap 1 and it is deferred, not finished.
 - **Thirteen entrance shapes.** Three are authored. The cycle that selects between them is the

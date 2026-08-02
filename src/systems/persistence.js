@@ -12,8 +12,23 @@
  * settings is worse than one that quietly forgets the score.
  */
 
+import { DifficultyRank, normalizeRank } from './caravans.js';
+
 export const HIGH_SCORE_KEY = 'alienEscape.highScore';
 export const SCORE_TABLE_KEY = 'alienEscape.scoreTable';
+
+/**
+ * The operator's difficulty rank.
+ *
+ * On a real cabinet this is a DIP switch inside the box, set once by whoever
+ * owns the machine and left alone: rank A is the factory setting and the harder
+ * ranks are what an operator turns to when games are running long. There is no
+ * DIP switch in a browser, so it is set from the attract screen instead -- but
+ * it is stored like a machine setting rather than carried in a game, because
+ * that is what it is. It survives a reload, and it applies to whoever plays
+ * next.
+ */
+export const RANK_KEY = 'alienEscape.rank';
 
 /**
  * The arcade keeps five names, not one number.
@@ -134,6 +149,36 @@ export function saveHighScore(storage, score, key = HIGH_SCORE_KEY) {
   }
 
   return score;
+}
+
+/**
+ * Read the stored difficulty rank.
+ *
+ * Anything unreadable, unparseable or off the end of the four ranks lands on A,
+ * which is the factory setting: a machine whose settings have been corrupted
+ * should come up playable rather than come up hard.
+ */
+export function loadRank(storage, key = RANK_KEY) {
+  try {
+    const raw = storage.getItem(key);
+    if (raw === null || raw === undefined) return DifficultyRank.A;
+    return normalizeRank(Number.parseInt(raw, 10));
+  } catch {
+    return DifficultyRank.A;
+  }
+}
+
+/** Store the rank, returning the one in effect afterwards. */
+export function saveRank(storage, rank, key = RANK_KEY) {
+  const normalized = normalizeRank(rank);
+
+  try {
+    storage.setItem(key, String(normalized));
+  } catch {
+    // As with the scores: a full or read-only quota should not stop a game.
+  }
+
+  return normalized;
 }
 
 /**

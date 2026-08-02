@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { readdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import {
   challengeResultSound,
   deathSoundFor,
   playerShotSound,
-  SOUND_FILES,
+  SOUND_NAMES,
 } from '../src/systems/audio.js';
+import { SOUND_SPECS } from '../src/audio/soundBank.js';
 import { EnemyType, FORMATION_SIZE } from '../src/systems/formation.js';
 
 describe('enemy death sounds', () => {
@@ -31,12 +33,10 @@ describe('enemy death sounds', () => {
     expect(deathSoundFor(undefined, { destroyed: true })).toBeTruthy();
   });
 
-  it('only ever names a sound the game actually loads', () => {
-    const keys = new Set(Object.keys(SOUND_FILES));
-
+  it('only ever names a sound the game actually has', () => {
     for (const type of [EnemyType.ZAKO, EnemyType.GOEI, EnemyType.BOSS, null]) {
       for (const destroyed of [true, false]) {
-        expect(keys.has(deathSoundFor(type, { destroyed }))).toBe(true);
+        expect(SOUND_NAMES).toContain(deathSoundFor(type, { destroyed }));
       }
     }
   });
@@ -53,9 +53,9 @@ describe('the player gun', () => {
     expect(fired[3]).toBe(fired[1]);
   });
 
-  it('only names sounds the game loads', () => {
+  it('only names sounds the game has', () => {
     for (let shot = 0; shot < 6; shot += 1) {
-      expect(SOUND_FILES[playerShotSound(shot)]).toBeDefined();
+      expect(SOUND_NAMES).toContain(playerShotSound(shot));
     }
   });
 });
@@ -70,34 +70,48 @@ describe('a challenging stage signing off', () => {
     expect(challengeResultSound(0, FORMATION_SIZE)).toBe('challengeMiss');
   });
 
-  it('only names sounds the game loads', () => {
+  it('only names sounds the game has', () => {
     for (let hits = 0; hits <= FORMATION_SIZE; hits += 1) {
-      expect(SOUND_FILES[challengeResultSound(hits, FORMATION_SIZE)]).toBeDefined();
+      expect(SOUND_NAMES).toContain(challengeResultSound(hits, FORMATION_SIZE));
     }
   });
 });
 
-describe('the sound manifest', () => {
-  it('points every key at an mp3 under the sfx directory', () => {
-    for (const path of Object.values(SOUND_FILES)) {
-      expect(path).toMatch(/^assets\/sfx\/[\w-]+\.mp3$/);
-    }
+describe('the set of sounds', () => {
+  it('is the bank, so a sound cannot be composed and left unwired', () => {
+    expect([...SOUND_NAMES].sort()).toEqual(Object.keys(SOUND_SPECS).sort());
   });
 
-  it('never loads the same file under two keys', () => {
-    const paths = Object.values(SOUND_FILES);
-    expect(new Set(paths).size).toBe(paths.length);
+  it('cannot be edited at run time by a scene that got hold of it', () => {
+    expect(Object.isFrozen(SOUND_NAMES)).toBe(true);
+  });
+});
+
+/**
+ * The guard on the thing this audio layer exists to prevent.
+ *
+ * Twenty-eight mp3s ripped from the Galaga ROM were committed to this
+ * repository and served from its public demo. They have been moved to the
+ * gitignored `assets/local/`, and the whole bank is synthesised instead. Both
+ * halves of that need pinning, because the failure is silent: a working game
+ * with ripped audio in it looks exactly like a working game.
+ */
+describe('what the repository ships', () => {
+  const AUDIO = /\.(mp3|ogg|wav|m4a|aac|flac|opus|webm)$/i;
+
+  function tracked() {
+    return execFileSync('git', ['ls-files'], { encoding: 'utf8' }).split('\n').filter(Boolean);
+  }
+
+  it('has no audio file committed to it anywhere', () => {
+    expect(tracked().filter((file) => AUDIO.test(file))).toEqual([]);
   });
 
-  // The repo shipped 28 sound files and used seven. This is the test that
-  // stops a file being added to `assets/sfx` and then quietly forgotten, which
-  // is exactly how the other twenty-one came to be sitting there unreferenced.
-  it('wires every sound file the repo ships', () => {
-    const onDisk = readdirSync('assets/sfx')
-      .filter((file) => file.endsWith('.mp3'))
-      .map((file) => `assets/sfx/${file}`)
-      .sort();
+  it('has nothing at all committed under the local directory', () => {
+    expect(tracked().filter((file) => file.startsWith('assets/local/'))).toEqual([]);
+  });
 
-    expect(Object.values(SOUND_FILES).sort()).toEqual(onDisk);
+  it('no longer ships the sfx directory the rips were served from', () => {
+    expect(() => readdirSync('assets/sfx')).toThrow();
   });
 });

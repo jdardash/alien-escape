@@ -1,5 +1,5 @@
 /**
- * The sound bank, and the rules for picking which sound plays.
+ * Which sound plays when.
  *
  * Galaga's audio is not decoration. Each rank of enemy has its own cry when it
  * is hit, a Boss Galaga surviving its first hit sounds different from one dying
@@ -9,62 +9,27 @@
  * explosion for all forty enemies has thrown away most of what the cabinet
  * sounded like.
  *
- * The manifest lives here rather than inline in the scene so that "which
- * sounds exist" and "which sound plays when" are one decision in one place,
- * and so `tests/audio.test.js` can assert the second never names something the
- * first does not load.
+ * The rules live here rather than inline in the scene so that they are one
+ * decision in one place, and so `tests/audio.test.js` can assert they never
+ * name a sound the game does not have.
+ *
+ * What each sound *is* lives in `src/audio/`: every one of them is synthesised
+ * at startup from a spec, because the twenty-eight mp3s this used to name were
+ * ripped from the Galaga ROM and had no business in a public repository. See
+ * `docs/local-audio.md`.
  */
 
+import { SOUND_SPECS } from '../audio/soundBank.js';
 import { EnemyType } from './formation.js';
 
 /**
- * Every sound the game loads, keyed by the name the scene plays it under.
+ * Every sound the game can play, by the name the scenes play it under.
  *
- * The repo shipped 28 sound files and used seven of them. The rest were not
- * missing, they were unwired: the boss cries, the two fighter shots, the
- * transform fanfare, the extra-life chime, the challenging-stage stings, the
- * title theme and the death music were all sitting in `assets/sfx` unreferenced.
+ * Read off the bank rather than written out again, so a sound cannot be
+ * composed and then never wired up -- which is how twenty-one of the original
+ * twenty-eight files came to be sitting in `assets/sfx` unreferenced.
  */
-export const SOUND_FILES = {
-  // Player.
-  fighterShot1: 'assets/sfx/fighter_shot1.mp3',
-  fighterShot2: 'assets/sfx/fighter_shot2.mp3',
-  playerDeath: 'assets/sfx/mistake_music.mp3',
-
-  // Enemies, one cry per rank.
-  zakoDeath: 'assets/sfx/zako_stricken.mp3',
-  goeiDeath: 'assets/sfx/goei_stricken.mp3',
-  bossHit: 'assets/sfx/boss_stricken2.mp3',
-  bossDeath: 'assets/sfx/bossDeath.mp3',
-  enemyDive: 'assets/sfx/flying.mp3',
-  enemyFire: 'assets/sfx/firing.mp3',
-  /** Generic burst, for anything that is not one of the ranked enemies. */
-  explosion: 'assets/sfx/kill.mp3',
-
-  // The capture cycle.
-  bossEntrance: 'assets/sfx/bossEntrance.mp3',
-  beamOpen: 'assets/sfx/beamShot.mp3',
-  beamCapture: 'assets/sfx/beamCapture.mp3',
-  captured: 'assets/sfx/captured.mp3',
-  rescued: 'assets/sfx/rescue_music.mp3',
-
-  // Stages and bonuses.
-  stageFlag: 'assets/sfx/stage_flag.mp3',
-  challengeStart: 'assets/sfx/challenge_start.mp3',
-  challengeClear: 'assets/sfx/challenge_clear.mp3',
-  challengePerfect: 'assets/sfx/challenge_perfect.mp3',
-  challengeMiss: 'assets/sfx/miss.mp3',
-  transformSet: 'assets/sfx/triple_formation.mp3',
-  extraLife: 'assets/sfx/extend_sound.mp3',
-
-  // Front of house.
-  theme: 'assets/sfx/theme.mp3',
-  coin: 'assets/sfx/coin.mp3',
-  gameStart: 'assets/sfx/start.mp3',
-  ambient: 'assets/sfx/ambient_loop.mp3',
-  highScoreEntry: 'assets/sfx/name_entry_1st.mp3',
-  gameOverTune: 'assets/sfx/name_entry_others.mp3',
-};
+export const SOUND_NAMES = Object.freeze(Object.keys(SOUND_SPECS));
 
 /**
  * Which cry an enemy makes when it is shot.
