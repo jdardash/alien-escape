@@ -273,11 +273,6 @@ export const LIFE_ICONS_SHOWN = 5;
 export const SPRITE_SCALE = {
   bullet: 38.912 / SPRITE_SOURCE_PX,
   laser: 43.008 / SPRITE_SOURCE_PX,
-  explosion: 51.2 / SPRITE_SOURCE_PX,
-  /** A boss dying draws a bigger burst than a Zako does. */
-  bossExplosion: 86.016 / SPRITE_SOURCE_PX,
-  /** The player's own death, bigger again. */
-  playerExplosion: 102.4 / SPRITE_SOURCE_PX,
 };
 
 /**

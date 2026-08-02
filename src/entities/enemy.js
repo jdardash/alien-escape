@@ -29,13 +29,16 @@ export const EnemyMode = {
  * exactly their screen size and scaling them would resample the pixels they
  * were authored to keep.
  */
-export function createEnemy(scene, group, slot, position) {
+export function createEnemy(scene, group, slot, position, frame = 0) {
   const sprite = slot.type === EnemyType.BOSS ? BOSS_SPRITE.healthy : slot.type;
 
   const enemy = group.create(position.x, position.y, shipTextureKey(sprite)).setOrigin(0.5);
   // Before the body is sized: a local override may be a different texture at a
   // different source size, and the body is measured off whichever one wins.
-  applyShipArt(enemy, sprite);
+  // Created on the formation's current wing frame, so a wave entering
+  // mid-flap is in step with the ships already parked.
+  applyShipArt(enemy, sprite, { frame });
+  enemy.artName = sprite;
 
   enemy.body.setSize(enemy.width * 0.62, enemy.height * 0.62, true);
   enemy.body.setAllowGravity(false);
@@ -57,8 +60,9 @@ export function createEnemy(scene, group, slot, position) {
  * textures come from the same grid, so the silhouette does not move by a pixel
  * and the change reads as damage rather than as a different enemy.
  */
-export function showBossDamage(enemy) {
-  applyShipArt(enemy, BOSS_SPRITE.damaged);
+export function showBossDamage(enemy, frame = 0) {
+  applyShipArt(enemy, BOSS_SPRITE.damaged, { frame });
+  enemy.artName = BOSS_SPRITE.damaged;
 }
 
 /** True when a target is outside formation and therefore worth more. */
@@ -88,7 +92,7 @@ export function canBeginDive(enemy) {
  * how the completed-set bonus is detected: each kill decrements the one
  * object, and the third kill is the one that pays.
  */
-export function createTransformEnemy(scene, group, type, position, set) {
+export function createTransformEnemy(scene, group, type, position, set, frame = 0) {
   // Drawn at scale 1: the texture is pixel art generated at exactly its screen
   // size, and scaling it would resample the pixels it was authored to keep.
   // The previous version drew a borrowed silhouette flattened with
@@ -96,6 +100,8 @@ export function createTransformEnemy(scene, group, type, position, set) {
   const enemy = group
     .create(position.x, position.y, transformTextureKey(type))
     .setOrigin(0.5);
+  applyShipArt(enemy, type, { frame });
+  enemy.artName = type;
 
   enemy.body.setSize(enemy.width * 0.62, enemy.height * 0.62, true);
   enemy.body.setAllowGravity(false);

@@ -27,7 +27,15 @@ import {
   SPRITE_SCALE,
   CHALLENGING,
   TRANSFORM,
+  ANIMATION,
 } from '../config.js';
+import {
+  flapFrameAt,
+  quantizeHeading,
+  explosionFrameAt,
+  spinAngleAt,
+} from '../systems/animation.js';
+import { EXPLOSION_SPRITES, frameCount } from '../art/pixelArt.js';
 import {
   EnemyType,
   buildFormationSlots,
@@ -112,14 +120,16 @@ import {
 } from '../systems/capture.js';
 import { resolveStorage, loadScoreTable, loadRank } from '../systems/persistence.js';
 import {
+  createExplosionTextures,
   createFlagTextures,
   createShipTextures,
   createTransformTextures,
+  explosionTextureKey,
   flagTextureKey,
   shipTextureKey,
   FLAG_DRAWN_WIDTH,
 } from '../art/textures.js';
-import { applyShipArt, queueLocalArt } from '../art/localArt.js';
+import { applyShipArt, localArtFrames, queueLocalArt } from '../art/localArt.js';
 import { installSoundBank } from '../audio/soundBank.js';
 import { queueLocalAudio } from '../audio/localAudio.js';
 import { recordShot, recordHit } from '../systems/stats.js';
@@ -151,7 +161,6 @@ export class GameScene extends Phaser.Scene {
     // `src/systems/starfield.js` rather than drawn.
     this.load.image('bullet', 'assets/images/player_laser.png');
     this.load.image('laser', 'assets/images/enemy_laser.png');
-    this.load.image('explosion', 'assets/images/explosion.png');
     this.load.image('tractorBeam', 'assets/images/tractor_beam.png');
 
     // A local checkout may keep its own ship artwork; see `src/art/localArt.js`.
@@ -227,6 +236,11 @@ export class GameScene extends Phaser.Scene {
     // anything asks for one.
     createShipTextures(this);
     createTransformTextures(this);
+    createExplosionTextures(this);
+
+    // The formation-wide wing frame currently showing. One clock for the
+    // whole board; see `flapFrameAt`.
+    this.flapFrame = 0;
 
     this.createWorld();
     this.createPlayer();
@@ -839,7 +853,7 @@ export class GameScene extends Phaser.Scene {
       group.members.forEach(({ slotIndex, pathVariant, mirrored, step }) => {
         const slot = slots[slotIndex];
         const start = entryPath(pathVariant, this.slotPosition(slot), SCREEN, mirrored).points[0];
-        const enemy = createEnemy(this, this.enemies, slot, start);
+        const enemy = createEnemy(this, this.enemies, slot, start, this.flapFrame);
         // An arriving ship gets at most one shot on the way in, and only from
         // stage 2: the entry-fire flag is off on the opening row at every rank.
         enemy.bombsLeft = entryFire && !this.noFire.triggered && Math.random() < 0.25 ? 1 : 0;
@@ -919,7 +933,7 @@ export class GameScene extends Phaser.Scene {
       const path = challengingPath(pattern, group.index, SCREEN);
 
       group.slotIndices.forEach((slotIndex, position) => {
-        const enemy = createEnemy(this, this.enemies, slots[slotIndex], path[0][0]);
+        const enemy = createEnemy(this, this.enemies, slots[slotIndex], path[0][0], this.flapFrame);
         enemy.mode = EnemyMode.PASSING;
 
         this.time.delayedCall(groupDelay + position * CHALLENGING.staggerMs, () => {
@@ -1068,7 +1082,14 @@ export class GameScene extends Phaser.Scene {
         x: origin.x + (i - (TRANSFORM_SET_SIZE - 1) / 2) * TRANSFORM.spacingX,
         y: origin.y,
       };
-      const enemy = createTransformEnemy(this, this.enemies, this.transformType, start, set);
+      const enemy = createTransformEnemy(
+        this,
+        this.enemies,
+        this.transformType,
+        start,
+        set,
+        this.flapFrame,
+      );
       enemy.bombsLeft = this.enemiesArmed() ? this.difficulty.continuousBombs : 0;
       enemy.bombCooldownMs = 0;
       enemy.flight = createFlight(
@@ -1310,8 +1331,14 @@ export class GameScene extends Phaser.Scene {
       targets: this.player,
       x: boss ? boss.x : this.player.x,
       y: boss ? boss.y + CAPTURE.captiveOffsetY : 0,
-      angle: 360,
       duration: CAPTURE.captureRiseMs,
+      // The cabinet's fighter has one sprite frame and sixteen orientations,
+      // so the ride up the beam is a stepped spin, not a smooth turn: the
+      // ship clicks through the same stops a diving Goei does.
+      onUpdate: (tween) =>
+        this.player.setRotation(
+          spinAngleAt(tween.progress * CAPTURE.captureRiseMs, CAPTURE.captureRiseMs),
+        ),
       onComplete: () => this.onCaptureComplete(),
     });
   }
@@ -1386,7 +1413,7 @@ export class GameScene extends Phaser.Scene {
     captive.flight = advanceFlight(captive.flight, delta);
     const { x, y, angle } = flightTransform(captive.flight);
     captive.setPosition(x, y);
-    captive.setRotation(angle);
+    captive.setRotation(quantizeHeading(angle));
 
     if (!captive.hasBombed && flightProgress(captive.flight) >= DIVE.bombAtProgress) {
       captive.hasBombed = true;
@@ -1425,6 +1452,12 @@ export class GameScene extends Phaser.Scene {
       y: this.player.y,
       duration: CAPTURE.dockDurationMs,
       ease: 'Sine.easeInOut',
+      // The freed ship spins down to the dock the same stepped way it spun
+      // up the beam, and arrives upright on the last step.
+      onUpdate: (tween) =>
+        this.captive.setRotation(
+          spinAngleAt(tween.progress * CAPTURE.dockDurationMs, CAPTURE.dockDurationMs),
+        ),
       onComplete: () => this.dockCaptive(),
     });
   }
@@ -1493,7 +1526,7 @@ export class GameScene extends Phaser.Scene {
 
     // A Boss Galaga survives its first hit and changes colour to show it.
     if (enemy.health > 0) {
-      showBossDamage(enemy);
+      showBossDamage(enemy, this.flapFrame);
       this.sfx[deathSoundFor(enemy.enemyType, { destroyed: false })].play({ volume: 0.4 });
       return;
     }
@@ -1548,10 +1581,7 @@ export class GameScene extends Phaser.Scene {
       this.captureState = transition(this.captureState, CaptureEvent.CAPTIVE_DESTROYED);
     }
 
-    const burst = this.add
-      .sprite(this.captive.x, this.captive.y, 'explosion')
-      .setScale(SPRITE_SCALE.explosion);
-    this.time.delayedCall(220, () => burst.destroy());
+    this.spawnExplosion('enemy', this.captive.x, this.captive.y, SHIP_DRAWN_PX);
     this.sfx.explosion.play({ volume: 0.4 });
 
     this.clearCaptive();
@@ -1580,16 +1610,57 @@ export class GameScene extends Phaser.Scene {
     );
   }
 
+  /**
+   * Play an explosion where something just died, frame by frame.
+   *
+   * `kind` is `enemy` or `player` -- the two sequences in
+   * `EXPLOSION_SPRITES` -- and the sprite is destroyed the moment
+   * `explosionFrameAt` reports the sequence done, so a blast can never be
+   * left frozen on screen. A local checkout's ripped frames are used
+   * whenever they are loaded, at the same drawn size.
+   */
+  spawnExplosion(kind, x, y, displaySize) {
+    const overrideName = kind === 'player' ? 'explosionPlayer' : 'explosionEnemy';
+    const local = localArtFrames(overrideName);
+    const frames = local?.length ?? frameCount(EXPLOSION_SPRITES[kind]);
+    const frameMs =
+      kind === 'player' ? ANIMATION.playerExplosionFrameMs : ANIMATION.enemyExplosionFrameMs;
+    const textureFor = (frame) =>
+      local ? local[frame % local.length] : explosionTextureKey(kind, frame);
+
+    const burst = this.add.sprite(x, y, textureFor(0)).setDepth(7);
+    burst.setDisplaySize(displaySize, displaySize);
+
+    let elapsed = 0;
+    const timer = this.time.addEvent({
+      delay: frameMs,
+      repeat: frames,
+      callback: () => {
+        elapsed += frameMs;
+        const frame = explosionFrameAt(frames, frameMs, elapsed);
+        if (frame === null) {
+          burst.destroy();
+          timer.remove();
+          return;
+        }
+        burst.setTexture(textureFor(frame));
+        burst.setDisplaySize(displaySize, displaySize);
+      },
+    });
+
+    return burst;
+  }
+
   destroyEnemy(enemy, withExplosion) {
     if (withExplosion) {
-      const burst = this.add
-        .sprite(enemy.x, enemy.y, 'explosion')
-        .setScale(
-          enemy.enemyType === EnemyType.BOSS
-            ? SPRITE_SCALE.bossExplosion
-            : SPRITE_SCALE.explosion,
-        );
-      this.time.delayedCall(220, () => burst.destroy());
+      // A boss dying draws a burst at twice a ship's size, everything else at
+      // one ship: the arcade's own proportions for the two.
+      this.spawnExplosion(
+        'enemy',
+        enemy.x,
+        enemy.y,
+        enemy.enemyType === EnemyType.BOSS ? SHIP_DRAWN_PX * 2 : SHIP_DRAWN_PX,
+      );
       // Each rank of enemy has its own cry in the arcade, which is how a
       // player knows what they hit without looking away from their own ship.
       this.sfx[deathSoundFor(enemy.enemyType)].play({ volume: 0.4 });
@@ -1613,10 +1684,9 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.sfx.playerDeath.play({ volume: 0.5 });
-    const burst = this.add
-      .sprite(this.player.x, this.player.y, 'explosion')
-      .setScale(SPRITE_SCALE.playerExplosion);
-    this.time.delayedCall(320, () => burst.destroy());
+    // The death blast is authored at 32x32 against the ships' 16x16, so its
+    // drawn size is two ships: the loudest thing the screen ever says.
+    this.spawnExplosion('player', this.player.x, this.player.y, SHIP_DRAWN_PX * 2);
 
     this.player.disableBody(true, false);
     this.player.setVisible(false);
@@ -1761,14 +1831,24 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * Stream the sky, or stop it.
+   * Stream the sky, stop it, or run it backwards.
    *
    * The hardware field stops scrolling while no fighter is on the board --
    * between a death and the respawn -- and that stop is the most legible
-   * "the world is holding its breath" cue the cabinet has.
+   * "the world is holding its breath" cue the cabinet has. And for the few
+   * frames the tractor beam is hauling the fighter UP, the whole sky
+   * reverses with it: the ROM sets a reverse flag when the beam latches
+   * (gg1-3.s l_236D) and clears it when the capture completes or the boss
+   * is shot out of it (l_2305, l_2327), which is exactly the window our
+   * CAPTURING state spans.
    */
   updateStarfield(delta) {
-    const speed = this.player.active ? STARFIELD_SCROLL.game : 0;
+    const speed =
+      this.captureState === CaptureState.CAPTURING
+        ? STARFIELD_SCROLL.capture
+        : this.player.active
+          ? STARFIELD_SCROLL.game
+          : 0;
     if (this.starfield.rowsPerFrame !== speed) {
       this.starfield = setStarfieldScroll(this.starfield, speed);
     }
@@ -1791,8 +1871,19 @@ export class GameScene extends Phaser.Scene {
       amplitude: FORMATION.swayAmplitude,
     });
 
+    // One wing-frame read for the whole pass: every alien on the board,
+    // parked or diving, flaps on the same beat, which is what the cabinet's
+    // shared frame counter did.
+    const frame = flapFrameAt(this.formationElapsed);
+    const flapped = frame !== this.flapFrame;
+    this.flapFrame = frame;
+
     this.enemies.getChildren().forEach((enemy) => {
       if (!enemy.active) return;
+
+      if (flapped && enemy.artName) {
+        applyShipArt(enemy, enemy.artName, { frame });
+      }
 
       if (enemy.flight) {
         this.advanceEnemyFlight(enemy, delta);
@@ -1810,7 +1901,10 @@ export class GameScene extends Phaser.Scene {
     enemy.flight = advanceFlight(enemy.flight, delta);
     const { x, y, angle } = flightTransform(enemy.flight);
     enemy.setPosition(x, y);
-    enemy.setRotation(angle);
+    // Snapped to the cabinet's sixteen sprite orientations at render time
+    // only: the path underneath stays continuous, so nothing about where the
+    // enemy is or what it hits changes -- just what the rotation looks like.
+    enemy.setRotation(quantizeHeading(angle));
 
     // Bombs release from the aim band: when the attacker is above the player
     // and roughly in their column, up to its continuous-bomb allowance, with
