@@ -94,6 +94,27 @@ The rules are `bossTintFor` and `needsHealthyBossTint` in
 [`src/art/localArt.js`](../src/art/localArt.js), pinned by
 [`tests/localArt.test.js`](../tests/localArt.test.js), and they apply per frame.
 
+## Slicing a sheet into all of this
+
+Rips usually arrive as one sprite sheet, not thirty files. `tools/slice-local-art.py`
+cuts a sheet into everything above in one run:
+
+```text
+copy tools/cutspec.template.json somewhere, fill in your sheet path and the
+pixel coordinates of each sprite on it, then:
+
+    python tools/slice-local-art.py my-cutspec.json
+```
+
+It crops each named cell (frame lists included), keys the sheet's background colour to
+transparent, composes `font_sheet.png` in the game's own glyph order, writes it all into
+`assets/local/`, and merges the names into `manifest.json` -- entries you already have
+are kept, and the previous manifest is saved as `manifest.json.bak`. The tool reads the
+name list and the glyph order out of the game's own source, so it cannot drift from what
+the manifest accepts. It needs Python with Pillow, contains no artwork, and downloads
+nothing: the sheet it cuts is yours, and everything it writes stays in the ignored
+directory.
+
 ## Fallback is per name, never per frame
 
 A sprite must never mix ripped and drawn frames -- half a flap from the cabinet and half
