@@ -52,7 +52,12 @@ import {
   flightProgress,
   flightTransform,
 } from '../systems/flight.js';
-import { advanceScheduler, createAttackScheduler } from '../systems/attack.js';
+import {
+  advanceNoFire,
+  advanceScheduler,
+  createAttackScheduler,
+  createNoFireState,
+} from '../systems/attack.js';
 import { DIP_DEFAULTS, bonusSchemeFor, loadDips } from '../systems/dips.js';
 import {
   STARFIELD_SCROLL,
@@ -183,6 +188,15 @@ export class GameScene extends Phaser.Scene {
       playerCount: this.demo ? 1 : (data?.playerCount ?? 1),
       startingLives: this.dips.lives,
     });
+
+    // The no-fire bug, if the operator has switched it on. Once triggered it
+    // holds until the "machine" is power cycled -- the registry survives
+    // scene restarts, so only a page reload clears it, which is the bug's
+    // real cure.
+    this.noFire = {
+      ...createNoFireState(),
+      triggered: this.registry.get('noFireTriggered') === true,
+    };
   }
 
   create() {
@@ -736,7 +750,7 @@ export class GameScene extends Phaser.Scene {
         const enemy = createEnemy(this, this.enemies, slot, start);
         // An arriving ship gets at most one shot on the way in, and only from
         // stage 2: the entry-fire flag is off on the opening row at every rank.
-        enemy.bombsLeft = entryFire && Math.random() < 0.25 ? 1 : 0;
+        enemy.bombsLeft = entryFire && !this.noFire.triggered && Math.random() < 0.25 ? 1 : 0;
         enemy.bombCooldownMs = 0;
 
         this.time.delayedCall(groupDelay + step * FORMATION.entryStaggerMs, () => {
@@ -868,6 +882,17 @@ export class GameScene extends Phaser.Scene {
    */
   updateAttacks(delta) {
     if (!this.attackActive || this.challenging || this.stageResolving) return;
+
+    // The no-fire lock-up accrues while the last enemies are being dodged
+    // rather than shot; see `advanceNoFire` for the conditions.
+    if (this.dips.noFireBug && !this.noFire.triggered) {
+      this.noFire = advanceNoFire(this.noFire, delta, {
+        enabled: true,
+        enemiesRemaining: this.enemies.countActive(true),
+      });
+      if (this.noFire.triggered) this.registry.set('noFireTriggered', true);
+    }
+
     if (!this.captureIsIdle()) return;
 
     const activeBombers = this.enemies.getChildren().filter(isDiving).length;
@@ -952,7 +977,7 @@ export class GameScene extends Phaser.Scene {
         y: origin.y,
       };
       const enemy = createTransformEnemy(this, this.enemies, this.transformType, start, set);
-      enemy.bombsLeft = enemiesBomb(this.stage, this.rank) ? this.difficulty.continuousBombs : 0;
+      enemy.bombsLeft = this.enemiesArmed() ? this.difficulty.continuousBombs : 0;
       enemy.bombCooldownMs = 0;
       enemy.flight = createFlight(
         divePath(start, this.player.x, SCREEN, { stageIndex: this.round }),
@@ -1031,7 +1056,7 @@ export class GameScene extends Phaser.Scene {
     // band rather than at a fixed point. Stage 1 is unarmed in the arcade --
     // the opening row's bomb-drop flags are zero at the factory rank -- so
     // the only way to lose a ship on the first screen is to be flown into.
-    enemy.bombsLeft = enemiesBomb(this.stage, this.rank) ? this.difficulty.continuousBombs : 0;
+    enemy.bombsLeft = this.enemiesArmed() ? this.difficulty.continuousBombs : 0;
     enemy.bombCooldownMs = 0;
     // Which block the dive flies and how hot comes from the per-stage flight
     // vectors, the arcade's own per-type selection.
@@ -1042,6 +1067,16 @@ export class GameScene extends Phaser.Scene {
       }),
       DIVE.durationMs / this.difficulty.diveSpeed,
     );
+  }
+
+  /**
+   * Whether this stage's attackers carry bombs at all.
+   *
+   * The stage's own flag, and then the no-fire lock-up on top of it: once
+   * that has tripped, nothing shoots again until the page is reloaded.
+   */
+  enemiesArmed() {
+    return enemiesBomb(this.stage, this.rank) && !this.noFire.triggered;
   }
 
   attemptCapture() {
@@ -1606,7 +1641,12 @@ export class GameScene extends Phaser.Scene {
       // what it always was -- bullets already in the air still land during it,
       // and banking early left the results screen showing a score above its own
       // high score.
-      this.scene.start('GameOverScene', { session: this.session });
+      this.scene.start('GameOverScene', {
+        session: this.session,
+        // A run played after the no-fire lock-up was against a machine that
+        // could not shoot back; its score does not rank.
+        scoreDisqualified: this.noFire.triggered,
+      });
     });
   }
 

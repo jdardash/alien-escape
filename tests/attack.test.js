@@ -133,3 +133,50 @@ describe('shape', () => {
     expect(JSON.stringify(state)).toBe(before);
   });
 });
+
+describe('the no-fire bug', () => {
+  it('needs the operator switch, a nearly empty board, and fifteen minutes', async () => {
+    const { NO_FIRE_TRIGGER_MS, NO_FIRE_MAX_ENEMIES, advanceNoFire, createNoFireState } =
+      await import('../src/systems/attack.js');
+
+    let state = createNoFireState();
+    expect(NO_FIRE_MAX_ENEMIES).toBe(2);
+
+    // A full board never accrues.
+    state = advanceNoFire(state, NO_FIRE_TRIGGER_MS * 2, { enabled: true, enemiesRemaining: 40 });
+    expect(state.triggered).toBe(false);
+    expect(state.accruedMs).toBe(0);
+
+    // A nearly empty board accrues but does not trigger early.
+    state = advanceNoFire(state, NO_FIRE_TRIGGER_MS - 1000, { enabled: true, enemiesRemaining: 2 });
+    expect(state.triggered).toBe(false);
+
+    // Crossing the threshold trips it for good.
+    state = advanceNoFire(state, 2000, { enabled: true, enemiesRemaining: 2 });
+    expect(state.triggered).toBe(true);
+    state = advanceNoFire(state, 1, { enabled: true, enemiesRemaining: 40 });
+    expect(state.triggered).toBe(true);
+  });
+
+  it('resets the accrual when the board fills back up', async () => {
+    const { NO_FIRE_TRIGGER_MS, advanceNoFire, createNoFireState } =
+      await import('../src/systems/attack.js');
+
+    let state = createNoFireState();
+    state = advanceNoFire(state, NO_FIRE_TRIGGER_MS - 1, { enabled: true, enemiesRemaining: 1 });
+    state = advanceNoFire(state, 16, { enabled: true, enemiesRemaining: 40 });
+    expect(state.accruedMs).toBe(0);
+    state = advanceNoFire(state, NO_FIRE_TRIGGER_MS - 1, { enabled: true, enemiesRemaining: 1 });
+    expect(state.triggered).toBe(false);
+  });
+
+  it('never accrues with the switch off, which is the factory setting', async () => {
+    const { NO_FIRE_TRIGGER_MS, advanceNoFire, createNoFireState } =
+      await import('../src/systems/attack.js');
+
+    let state = createNoFireState();
+    state = advanceNoFire(state, NO_FIRE_TRIGGER_MS * 3, { enabled: false, enemiesRemaining: 1 });
+    expect(state.triggered).toBe(false);
+    expect(state.accruedMs).toBe(0);
+  });
+});

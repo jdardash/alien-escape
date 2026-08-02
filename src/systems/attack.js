@@ -38,6 +38,43 @@ export const ATTACK_TYPES = ['boss', 'goei', 'zako'];
  */
 export const TRANSFORM_EVERY_NTH_ZAKO = 6;
 
+/**
+ * The no-fire bug's trigger time: about fifteen minutes.
+ *
+ * The famous trick: clear the board down to the last couple of Zako, dodge
+ * their dives without shooting for a quarter of an hour, and the firing
+ * routine locks up -- no enemy shoots again until the machine is power
+ * cycled. Reproducing it faithfully makes the game silently unlosable, which
+ * is why it sits behind an operator switch that is off from the factory and
+ * why a run played after the trigger is disqualified from the score board.
+ */
+export const NO_FIRE_TRIGGER_MS = 900000;
+
+/** The most enemies that may remain while the lock-up accrues. */
+export const NO_FIRE_MAX_ENEMIES = 2;
+
+/** Fresh no-fire tracking: nothing accrued, nothing triggered. */
+export function createNoFireState() {
+  return { accruedMs: 0, triggered: false };
+}
+
+/**
+ * Accrue toward the lock-up.
+ *
+ * Only while the switch is on and at most `NO_FIRE_MAX_ENEMIES` remain; a
+ * board that fills back up resets the accrual. Once triggered it stays
+ * triggered -- clearing it is the caller's power cycle, not this function's.
+ */
+export function advanceNoFire(state, deltaMs, { enabled = false, enemiesRemaining = 0 } = {}) {
+  if (state.triggered || !enabled) return state;
+  if (enemiesRemaining <= 0 || enemiesRemaining > NO_FIRE_MAX_ENEMIES) {
+    return state.accruedMs === 0 ? state : { ...state, accruedMs: 0 };
+  }
+
+  const accruedMs = state.accruedMs + deltaMs;
+  return { accruedMs, triggered: accruedMs >= NO_FIRE_TRIGGER_MS };
+}
+
 /** A scheduler for one stage, from that stage's difficulty row. */
 export function createAttackScheduler(row) {
   return {

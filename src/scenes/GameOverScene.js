@@ -42,6 +42,11 @@ export class GameOverScene extends Phaser.Scene {
 
     this.twoPlayer = this.results.length > 1;
 
+    // A run played after the no-fire lock-up tripped was against a machine
+    // that could not shoot back. The score is shown -- it happened -- but it
+    // ranks nowhere and no initials are taken.
+    this.scoreDisqualified = data?.scoreDisqualified === true;
+
     this.storage = resolveStorage(globalThis.localStorage);
     this.table = loadScoreTable(this.storage);
 
@@ -49,7 +54,7 @@ export class GameOverScene extends Phaser.Scene {
     // either name is taken. Ranking player two after player one has already
     // been written would let a good first score push a better second one down.
     for (const result of this.results) {
-      result.rank = scoreTableRank(this.table, result.score);
+      result.rank = this.scoreDisqualified ? -1 : scoreTableRank(this.table, result.score);
     }
 
     this.pending = this.results.filter((result) => result.rank !== -1);
@@ -78,6 +83,15 @@ export class GameOverScene extends Phaser.Scene {
         fill: '#ff4444',
       })
       .setOrigin(0.5);
+
+    if (this.scoreDisqualified) {
+      this.add
+        .text(SCREEN.width / 2, 160, 'NO FIRE - SCORE NOT RANKED', {
+          font: '15px monospace',
+          fill: '#cc8844',
+        })
+        .setOrigin(0.5);
+    }
 
     this.drawResults();
     this.nextNameEntry();
