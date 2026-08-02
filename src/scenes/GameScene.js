@@ -20,6 +20,7 @@ import {
   DIVE,
   DUAL_FIGHTER_OFFSET_X,
   FORMATION,
+  FORMATION_BOTTOM_Y,
   LIFE_ICONS_SHOWN,
   PLAYER,
   SCREEN,
@@ -53,6 +54,7 @@ import {
   flightProgress,
   flightTransform,
 } from '../systems/flight.js';
+import { advanceScheduler, createAttackScheduler } from '../systems/attack.js';
 import {
   scoreFor,
   extraLivesEarned,
@@ -654,6 +656,11 @@ export class GameScene extends Phaser.Scene {
     this.challenging = isChallengingStage(stage);
     this.transformType = transformTypeFor(stage);
 
+    // The stage's attack scheduler: per-type launch counters out of the
+    // difficulty row. It starts counting when the wave finishes assembling.
+    this.attack = createAttackScheduler(this.difficulty);
+    this.attackActive = false;
+
     // A docked dual fighter carries over into the next stage; anything else
     // mid-sequence does not. Clearing the state but leaving the second ship on
     // screen would have left it firing two shots against a two-shot limit and
@@ -716,7 +723,10 @@ export class GameScene extends Phaser.Scene {
         const slot = slots[slotIndex];
         const start = entryPath(pathVariant, this.slotPosition(slot), SCREEN, mirrored).points[0];
         const enemy = createEnemy(this, this.enemies, slot, start);
-        enemy.willBomb = entryFire && Math.random() < 0.25;
+        // An arriving ship gets at most one shot on the way in, and only from
+        // stage 2: the entry-fire flag is off on the opening row at every rank.
+        enemy.bombsLeft = entryFire && Math.random() < 0.25 ? 1 : 0;
+        enemy.bombCooldownMs = 0;
 
         this.time.delayedCall(groupDelay + step * FORMATION.entryStaggerMs, () => {
           if (!enemy.active) return;
@@ -738,8 +748,9 @@ export class GameScene extends Phaser.Scene {
     this.assemblyTimer = this.time.delayedCall(this.assemblyDurationMs(groups), () => {
       this.assemblyTimer = null;
       if (this.isGameOver || this.stageResolving) return;
-      this.scheduleDives();
-      this.scheduleTransforms();
+      // The arcade lets the wave finish arriving before anything attacks;
+      // from here the per-type launch counters run.
+      this.attackActive = true;
     });
   }
 
@@ -835,12 +846,33 @@ export class GameScene extends Phaser.Scene {
 
   // ---------------------------------------------------------------- attacks
 
-  scheduleDives() {
-    this.diveTimer = this.time.addEvent({
-      delay: this.difficulty.diveIntervalMs,
-      loop: true,
-      callback: () => this.launchDive(),
+  /**
+   * Pump the per-type launch counters.
+   *
+   * Called every frame once the wave has assembled. The scheduler decides
+   * which types launch this frame against the row's active-bomber ceiling,
+   * and whether this frame's Zako launch is instead the transform pull --
+   * the arcade's schedule-driven trigger, in place of the 15-second timer an
+   * earlier revision ran.
+   */
+  updateAttacks(delta) {
+    if (!this.attackActive || this.challenging || this.stageResolving) return;
+    if (!this.captureIsIdle()) return;
+
+    const activeBombers = this.enemies.getChildren().filter(isDiving).length;
+    const availableTypes = [
+      ...new Set(this.enemies.getChildren().filter(canBeginDive).map((e) => e.enemyType)),
+    ];
+
+    const { state, launches, transformPull } = advanceScheduler(this.attack, delta, {
+      activeBombers,
+      availableTypes,
+      transformStage: Boolean(this.transformType),
     });
+    this.attack = state;
+
+    launches.forEach((type) => this.launchDive(type));
+    if (transformPull) this.triggerTransform();
   }
 
   scheduleCaptureAttempts() {
@@ -848,16 +880,6 @@ export class GameScene extends Phaser.Scene {
       delay: CAPTURE.attemptIntervalMs,
       loop: true,
       callback: () => this.attemptCapture(),
-    });
-  }
-
-  scheduleTransforms() {
-    if (!this.transformType) return;
-
-    this.transformTimer = this.time.addEvent({
-      delay: TRANSFORM.intervalMs,
-      loop: true,
-      callback: () => this.triggerTransform(),
     });
   }
 
@@ -919,8 +941,8 @@ export class GameScene extends Phaser.Scene {
         y: origin.y,
       };
       const enemy = createTransformEnemy(this, this.enemies, this.transformType, start, set);
-      enemy.willBomb =
-        enemiesBomb(this.stage, this.rank) && Math.random() < this.difficulty.bombChance;
+      enemy.bombsLeft = enemiesBomb(this.stage, this.rank) ? this.difficulty.continuousBombs : 0;
+      enemy.bombCooldownMs = 0;
       enemy.flight = createFlight(
         divePath(start, this.player.x, SCREEN, { stageIndex: this.round }),
         TRANSFORM.runDurationMs,
@@ -943,32 +965,38 @@ export class GameScene extends Phaser.Scene {
     );
   }
 
-  launchDive() {
+  /**
+   * Launch one attacker of the type whose counter just expired.
+   *
+   * The pick within the type is random; the *type* is the scheduler's, which
+   * is the arcade's split of the decision.
+   */
+  launchDive(type) {
     if (this.isGameOver || this.challenging || !this.captureIsIdle()) return;
 
-    const diving = this.enemies.getChildren().filter(isDiving).length;
-    if (diving >= this.difficulty.maxSimultaneousDivers) return;
-
     const eligible = this.enemies.getChildren().filter(canBeginDive);
-    if (eligible.length === 0) return;
+    const ofType = eligible.filter((enemy) => enemy.enemyType === type);
+    if (ofType.length === 0) return;
 
     // A boss holding a captured fighter has to actually leave formation for
     // the rescue to be possible at all, so it is weighted to lead the dive
-    // rather than waiting for a one-in-forty draw.
+    // rather than waiting for a one-in-four draw.
     const captorLeads =
+      type === EnemyType.BOSS &&
       this.captor?.captiveAttached === true &&
       canBeginDive(this.captor) &&
       Math.random() < CAPTURE.captorDiveChance;
 
-    const leader = captorLeads ? this.captor : Phaser.Utils.Array.GetRandom(eligible);
+    const leader = captorLeads ? this.captor : Phaser.Utils.Array.GetRandom(ofType);
     const attackers = [leader];
 
-    // A Boss Galaga may bring Goei escorts, which is what makes it worth up to
-    // 1600 rather than 400.
-    if (leader.enemyType === EnemyType.BOSS && Math.random() < this.difficulty.escortChance) {
+    // A Boss Galaga clones Goei wingmen onto its run -- the clone-attack
+    // count is a difficulty-table parameter -- which is what makes it worth
+    // up to 1600 rather than 400.
+    if (leader.enemyType === EnemyType.BOSS && this.difficulty.cloneAttackCount > 0) {
       const escorts = eligible
         .filter((enemy) => enemy !== leader && enemy.enemyType === EnemyType.GOEI)
-        .slice(0, 2);
+        .slice(0, this.difficulty.cloneAttackCount);
       attackers.push(...escorts);
     }
 
@@ -982,17 +1010,18 @@ export class GameScene extends Phaser.Scene {
     if (!canBeginDive(enemy)) return;
     this.beginDiveSound();
     enemy.mode = EnemyMode.DIVING;
-    enemy.hasBombed = false;
 
     // A captor takes the fighter it is holding down with it, and the fighter
     // fights: rearm it for this run. See `updateCaptive` for the release.
     if (enemy.captiveAttached && this.captive) this.captive.hasBombed = false;
 
-    // Stage 1 is unarmed in the arcade: the opening round's difficulty row has
-    // its bomb-drop flags at zero, so the only way to lose a ship on the first
-    // screen is to be flown into.
-    enemy.willBomb =
-        enemiesBomb(this.stage, this.rank) && Math.random() < this.difficulty.bombChance;
+    // The continuous-bomb allowance is a difficulty-table parameter: how many
+    // bombs one attacker may string together on a run, released from the aim
+    // band rather than at a fixed point. Stage 1 is unarmed in the arcade --
+    // the opening row's bomb-drop flags are zero at the factory rank -- so
+    // the only way to lose a ship on the first screen is to be flown into.
+    enemy.bombsLeft = enemiesBomb(this.stage, this.rank) ? this.difficulty.continuousBombs : 0;
+    enemy.bombCooldownMs = 0;
     // Which block the dive flies and how hot comes from the per-stage flight
     // vectors, the arcade's own per-type selection.
     enemy.flight = createFlight(
@@ -1579,6 +1608,7 @@ export class GameScene extends Phaser.Scene {
     this.formationElapsed += delta;
 
     this.updateFormation(delta);
+    this.updateAttacks(delta);
     this.updateDiveSound();
     this.updatePlayer();
     this.updateCaptive(delta);
@@ -1618,22 +1648,32 @@ export class GameScene extends Phaser.Scene {
     enemy.setPosition(x, y);
     enemy.setRotation(angle);
 
-    // Bomb at a fixed point of the run rather than on a per-frame roll, so an
-    // attacker always releases at the same moment regardless of frame rate.
-    // Whether it bombs at all is decided once, when the run begins.
+    // Bombs release from the aim band: when the attacker is above the player
+    // and roughly in their column, up to its continuous-bomb allowance, with
+    // a reload between shots. That is the arcade's model -- a diver that
+    // crosses the player's column twice shoots twice -- and it is why moving
+    // under a dive is a decision rather than a free dodge.
     //
     // A transform bonus ship flies `PASSING` because it never joins a
     // formation, but it is making an attack run, not a fly-past: the trio is
     // the highest-value target on the board and an unarmed one would be a free
     // 1,480 points. Challenging-stage enemies are `PASSING` too and are the
-    // genuinely harmless case; they never have `willBomb` set.
+    // genuinely harmless case; they never have bombs to spend.
     const bombing =
       enemy.mode === EnemyMode.DIVING ||
       enemy.mode === EnemyMode.ENTERING ||
       enemy.transformSet !== undefined;
-    if (bombing && !enemy.hasBombed && flightProgress(enemy.flight) >= DIVE.bombAtProgress) {
-      enemy.hasBombed = true;
-      if (enemy.willBomb) this.fireEnemyBullet(enemy);
+    if (bombing && enemy.bombsLeft > 0) {
+      enemy.bombCooldownMs = Math.max((enemy.bombCooldownMs ?? 0) - delta, 0);
+      const inBand =
+        Math.abs(enemy.x - this.player.x) < DIVE.bombAimWindowPx &&
+        enemy.y > FORMATION_BOTTOM_Y - 40 &&
+        enemy.y < PLAYER.y - 140;
+      if (inBand && enemy.bombCooldownMs === 0 && this.player.active) {
+        enemy.bombsLeft -= 1;
+        enemy.bombCooldownMs = DIVE.bombReloadMs;
+        this.fireEnemyBullet(enemy);
+      }
     }
 
     if (!isFlightComplete(enemy.flight)) return;
@@ -1945,11 +1985,9 @@ export class GameScene extends Phaser.Scene {
   clearTimers() {
     this.assemblyTimer?.remove();
     this.assemblyTimer = null;
-    this.diveTimer?.remove();
-    this.diveTimer = null;
     this.captureTimer?.remove();
     this.captureTimer = null;
-    this.transformTimer?.remove();
-    this.transformTimer = null;
+    // The attack scheduler is not a timer, but it stops with them.
+    this.attackActive = false;
   }
 }

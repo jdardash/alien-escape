@@ -140,18 +140,29 @@ export const DIVE = {
   durationMs: 3000,
   returnDurationMs: 1500,
   bombSpeed: 360,
-  // How often an attacker that is allowed to bomb actually does now lives in
-  // `stageDifficulty`, because it varies with the operator's difficulty rank
-  // and a constant here could only hold the rank-A value.
+  // How many bombs an attacker strings together now comes from the
+  // difficulty table's continuous-bomb column, because it is a difficulty
+  // parameter and the whole point of the rank dimension is that difficulty
+  // parameters vary with it.
   /**
-   * How far into a run an attacker releases its bomb.
+   * How far into a run a *captive* releases its shot.
    *
-   * A fixed point in the run rather than a per-frame roll, so the release
-   * happens at the same place on any refresh rate. A held fighter diving with
-   * its captor uses the same fraction, which is what lands the pair of shots
-   * together.
+   * Ordinary attackers release from the aim band below; the captured fighter
+   * diving with its captor keeps a fixed release point so the pair of shots
+   * lands together, which is the choreography the rescue dive is sourced to
+   * have.
    */
   bombAtProgress: 0.3,
+  /**
+   * The aim band: how far from the player's column an attacker may release.
+   *
+   * The arcade's bombs are aimed within a spread rather than dropped blind,
+   * which is what makes standing still under a dive lethal and moving away
+   * from it safe. Half a ship of slack either side of dead centre.
+   */
+  bombAimWindowPx: 64,
+  /** Reload between two bombs of one attacker's continuous string. */
+  bombReloadMs: 340,
   /**
    * How many enemy bombs may exist at once.
    *
@@ -326,8 +337,9 @@ export const BOSS_SPRITE = { healthy: 'boss', damaged: 'bossDamaged' };
  * Galaxian's blue with red wingtips.
  */
 export const TRANSFORM = {
-  /** How often the game may pull a Zako out, once the stage allows it. */
-  intervalMs: 15000,
+  // When a Zako is pulled is no longer a clock: every Nth Zako attack launch
+  // becomes the pull instead (`TRANSFORM_EVERY_NTH_ZAKO` in
+  // `src/systems/attack.js`), which is the arcade's schedule-driven trigger.
   /** Warning pulse before the change. */
   pulseDurationMs: 260,
   pulseRepeats: 5,
