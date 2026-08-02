@@ -24,7 +24,7 @@
  *
  * A boss dispatch alternates missions: every other one is a solo capture
  * dive, the rest are escort sorties (gg1-2_fx.s:1013-1120). The alternation
- * state is exposed for the capture machine (Task 5) to consume.
+ * state is exposed for `capture.js` to consume.
  *
  * When the board thins below the stage's threshold while the player can
  * still fire, continuous bombing arms: every reload pins to 2 ticks and
@@ -171,7 +171,7 @@ export function createAttackScheduler(row) {
     /**
      * The boss mission alternation (`_b_bmbr_boss_wingm`): advanced on each
      * boss dispatch while no capture is in progress; even lands a solo
-     * capture dive, odd an escort sortie. Task 5's capture machine reads it.
+     * capture dive, odd an escort sortie. `capture.js` reads it.
      */
     bossToggle: 0,
     /** Rapid-fire endgame: live bugs below threshold with fire active. */

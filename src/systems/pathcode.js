@@ -369,7 +369,8 @@ function fetch(state, context, events) {
       case 0xf4: {
         // Capture aim (case_0A53): clamp the player's sprite X to the beam
         // band, aim down toward it at dive depth raw 0x48, and arm the
-        // capture monitor (an event here; Task 5's machine consumes it).
+        // capture monitor (emitted as a `captureAim` event; `capture.js`
+        // anchors the beam on it).
         const clamped = Math.min(Math.max(playerSpriteX(context), 0x29), 0xc9);
         const dx = clamped / 2 - state.xFixed / 256;
         const dy = 0x48 - state.yFixed / 256;

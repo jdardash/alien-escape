@@ -347,10 +347,9 @@ export const CHALLENGING_PATTERN_COUNT = CHALLENGE_ROWS.length;
  * `pattern` selects the row; `offset` is the wave (five per row), whose
  * first wave byte carries the route: index into `db_2A3C` 6-23 (the
  * token-free blocks) plus the variant member and negate-rotation bit. The
- * stream flies its shape and leaves; there is no homing phase at all. Full
- * roster wiring -- both members, transients, launch beats -- is Task 4's
- * stream machine; until then each flight of eight follows its wave's first
- * member byte, as the scene has always flown it.
+ * stream flies its shape and leaves; there is no homing phase at all. This
+ * compiles one wave's route as a track; the full roster -- both members,
+ * launch beats -- launches through `caravans.js`'s stream machine.
  */
 export function challengingPath(pattern, offset, screen) {
   const row = CHALLENGE_ROWS[((pattern % CHALLENGING_PATTERN_COUNT) + CHALLENGING_PATTERN_COUNT) % CHALLENGING_PATTERN_COUNT];
