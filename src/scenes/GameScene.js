@@ -35,6 +35,7 @@ import {
   explosionFrameAt,
   spinAngleAt,
 } from '../systems/animation.js';
+import { beamStripsAt } from '../systems/beam.js';
 import { EXPLOSION_SPRITES, frameCount } from '../art/pixelArt.js';
 import {
   EnemyType,
@@ -161,7 +162,6 @@ export class GameScene extends Phaser.Scene {
     // `src/systems/starfield.js` rather than drawn.
     this.load.image('bullet', 'assets/images/player_laser.png');
     this.load.image('laser', 'assets/images/enemy_laser.png');
-    this.load.image('tractorBeam', 'assets/images/tractor_beam.png');
 
     // A local checkout may keep its own ship artwork; see `src/art/localArt.js`.
     // Absent, this is one 404 and the drawn ships are used.
@@ -1252,22 +1252,39 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.sfx.beamOpen.play({ volume: 0.5 });
-    this.beam = this.add
-      .image(boss.x, boss.y + CAPTURE.beamOffsetY, 'tractorBeam')
-      .setOrigin(0.5, 0)
-      .setDisplaySize(CAPTURE.beamWidth * 1.4, CAPTURE.beamLength)
-      .setAlpha(0)
-      .setDepth(5);
 
-    this.tweens.add({
-      targets: this.beam,
-      alpha: 0.85,
-      duration: CAPTURE.beamOpenMs,
-      onComplete: () => {
-        if (this.captureState === CaptureState.BEAM_OPENING) {
-          this.captureState = CaptureState.BEAM_ACTIVE;
-        }
-      },
+    // A ripped beam, when a local checkout has one: full-beam frames cycled
+    // like the strips would be, revealed by a crop while it unfurls. Without
+    // one the fan is drawn strip by strip; either way `this.beam` is the
+    // object whose x/y the pull and the demo pilot read.
+    const local = localArtFrames('beam');
+    if (local && this.textures.exists(local[0])) {
+      this.beam = this.add
+        .image(boss.x, boss.y + CAPTURE.beamOffsetY, local[0])
+        .setOrigin(0.5, 0)
+        .setDisplaySize(CAPTURE.beamWidth * 1.4, CAPTURE.beamLength)
+        .setAlpha(0.85)
+        .setDepth(5);
+      this.beamLocalFrames = local;
+    } else {
+      this.beam = this.add.graphics({ x: boss.x, y: boss.y + CAPTURE.beamOffsetY });
+      this.beam.setAlpha(0.85).setDepth(5);
+      this.beamLocalFrames = null;
+    }
+
+    this.beamPhase = 'opening';
+    this.beamPhaseElapsed = 0;
+    this.beamTotalElapsed = 0;
+    this.drawBeam();
+
+    this.time.delayedCall(CAPTURE.beamOpenMs, () => {
+      if (this.captureState === CaptureState.BEAM_OPENING) {
+        this.captureState = CaptureState.BEAM_ACTIVE;
+      }
+      if (this.beamPhase === 'opening') {
+        this.beamPhase = 'active';
+        this.beamPhaseElapsed = 0;
+      }
     });
 
     this.time.delayedCall(CAPTURE.beamOpenMs + CAPTURE.beamHoldMs, () => this.closeBeam());
@@ -1276,7 +1293,13 @@ export class GameScene extends Phaser.Scene {
   closeBeam() {
     if (!isBeamDangerous(this.captureState)) return;
     this.captureState = transition(this.captureState, CaptureEvent.BEAM_TIMEOUT);
-    this.clearBeam();
+
+    // The trap is sprung the moment the state machine says so; the furl that
+    // follows is only the picture of it closing. The boss does not wait for it.
+    if (this.beam) {
+      this.beamPhase = 'retracting';
+      this.beamPhaseElapsed = 0;
+    }
 
     const boss = this.captor;
     this.captor = null;
@@ -1287,6 +1310,43 @@ export class GameScene extends Phaser.Scene {
     if (this.beam) {
       this.beam.destroy();
       this.beam = null;
+      this.beamLocalFrames = null;
+    }
+  }
+
+  /**
+   * Draw the beam as it stands this frame: the strip fan from
+   * `beamStripsAt`, or a local checkout's ripped frames cropped to the same
+   * reveal and cycled on the same clock.
+   */
+  drawBeam() {
+    const opts = {
+      strips: CAPTURE.beamStrips,
+      openMs: CAPTURE.beamOpenMs,
+      cycleMs: CAPTURE.beamCycleMs,
+      retractMs: CAPTURE.beamRetractMs,
+      width: CAPTURE.beamWidth * 1.4,
+      length: CAPTURE.beamLength,
+    };
+    const strips = beamStripsAt(this.beamPhase, this.beamPhaseElapsed, opts);
+
+    if (this.beamLocalFrames) {
+      const frame =
+        this.beamLocalFrames[
+          Math.floor(this.beamTotalElapsed / CAPTURE.beamCycleMs) % this.beamLocalFrames.length
+        ];
+      if (this.textures.exists(frame)) this.beam.setTexture(frame);
+      const source = this.beam.texture.getSourceImage();
+      const revealed = strips.length / CAPTURE.beamStrips;
+      this.beam.setCrop(0, 0, source.width, source.height * revealed);
+      this.beam.setDisplaySize(CAPTURE.beamWidth * 1.4, CAPTURE.beamLength);
+      return;
+    }
+
+    this.beam.clear();
+    for (const strip of strips) {
+      this.beam.fillStyle(strip.color, 1);
+      this.beam.fillRect(-strip.width / 2, strip.yOffset, strip.width, strip.height);
     }
   }
 
@@ -2085,9 +2145,23 @@ export class GameScene extends Phaser.Scene {
   }
 
   updateBeam(delta) {
-    if (!this.beam || !this.captor || !this.captor.active) return;
+    if (!this.beam) return;
 
-    this.beam.setPosition(this.captor.x, this.captor.y + CAPTURE.beamOffsetY);
+    this.beamPhaseElapsed += delta;
+    this.beamTotalElapsed += delta;
+
+    if (this.captor && this.captor.active) {
+      this.beam.setPosition(this.captor.x, this.captor.y + CAPTURE.beamOffsetY);
+    }
+    this.drawBeam();
+
+    // The furl plays out where the beam was left and then the object goes.
+    if (this.beamPhase === 'retracting') {
+      if (this.beamPhaseElapsed >= CAPTURE.beamRetractMs) this.clearBeam();
+      return;
+    }
+
+    if (!this.captor || !this.captor.active) return;
     if (!isBeamDangerous(this.captureState) || !this.canBeHurt()) return;
 
     // Inside the beam column: drag the player toward its centre, and capture

@@ -225,6 +225,16 @@ export const CAPTURE = {
   /** Gap between the boss and the mouth of its beam. */
   beamOffsetY: 26,
   /**
+   * The beam as the cabinet draws it: a fan of horizontal strips revealed
+   * top-down while it opens, colour-cycling while it waits, furled bottom-up
+   * when it gives up. The strips land inside the open/hold windows above, and
+   * the retract is purely visual -- the beam has already stopped being
+   * dangerous by the time it plays.
+   */
+  beamStrips: 12,
+  beamCycleMs: 100,
+  beamRetractMs: 300,
+  /**
    * How far up the beam the player has to be dragged to be taken.
    *
    * With the beam mouth at `descendToY + beamOffsetY` this leaves the player
