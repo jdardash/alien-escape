@@ -92,12 +92,14 @@ import {
 import { FRAME_MS, PATHCODE_FPS, angleToRadians } from '../systems/pathcode.js';
 import { DIP_DEFAULTS, bonusSchemeFor, loadDips } from '../systems/dips.js';
 import {
-  STARFIELD_SCROLL,
   advanceStarfield,
   createStarfield,
-  setStarfieldScroll,
+  setStarfieldControl,
+  setStarfieldReverse,
+  setStarfieldScrollEnable,
   visibleStars,
 } from '../systems/starfield.js';
+import { starSpeedControl } from '../systems/difficultyData.js';
 import {
   scoreFor,
   extraLivesEarned,
@@ -406,10 +408,12 @@ export class GameScene extends Phaser.Scene {
   // ------------------------------------------------------------------ setup
 
   createWorld() {
-    // The 63-star hardware field. It streams during play and stops dead
+    // The 05XX starfield: 252 fixed stars, 63 a set, two sets lit at a
+    // time. It streams during play and stops dead
     // while no fighter is on the board, which is the cabinet's own tell that
-    // the world has paused; see `updateStarfield`.
-    this.starfield = setStarfieldScroll(createStarfield(), STARFIELD_SCROLL.game);
+    // the world has paused; see `updateStarfield`. Speed comes from the
+    // f_1D76 ramp machine against the stage control `beginStage` sets.
+    this.starfield = createStarfield();
     this.starLayer = this.add.graphics().setScrollFactor(0);
 
     // Synthesised into the audio cache here, in `create`, rather than fetched
@@ -831,6 +835,12 @@ export class GameScene extends Phaser.Scene {
     this.difficulty = stageDifficulty(this.round, this.rank);
     this.challenging = isChallengingStage(stage);
     this.transformType = transformTypeFor(stage);
+
+    // c_2C00's closing act (new_stage.s:105-117): the stage's star scroll
+    // control, 0x40 + ((min(stage, 0x10) << 2) & 0x70). The starfield's
+    // f_1D76 machine chases it at +1 a frame and scrolls its carry bits,
+    // ramping play speed from 1.0 rows/frame at stage 1 to 2.0 at 16+.
+    this.starfield = setStarfieldControl(this.starfield, starSpeedControl(stage));
 
     // The stg_init_env beats this scene keeps: the caravan header latched to
     // b_92E2, a fresh formation-motion machine (oscillate re-enabled,
@@ -1662,6 +1672,7 @@ export class GameScene extends Phaser.Scene {
       stage8Switch: this.difficulty.stage8PathSwitch,
       stage12Switch: this.difficulty.stage12BombingSwitch,
       continuousBombing: this.attack?.continuousBombing ?? false,
+      frameCount: this.romFrame ?? 0,
     });
     captive.flight = flight;
     const { x, y, angle } = liveFlightTransform(flight);
@@ -2158,6 +2169,15 @@ export class GameScene extends Phaser.Scene {
   update(_time, delta) {
     if (this.isGameOver || this.frozen) return;
 
+    // The global hardware-frame counter (`ds3_92A0_frame_cts`): the path
+    // interpreter's vx/vy alternation reads its parity, so every live
+    // flight is fed the same count through `liveFlightContext` and steps
+    // its axes in lockstep, as the ROM's slots do.
+    this.romFrameAccMs = (this.romFrameAccMs ?? 0) + delta;
+    const romFrames = Math.floor(this.romFrameAccMs / FRAME_MS + 1e-9);
+    this.romFrameAccMs -= romFrames * FRAME_MS;
+    this.romFrame = ((this.romFrame ?? 0) + romFrames) & 0xffffff;
+
     this.updateStarfield(delta);
     this.formationElapsed += delta;
 
@@ -2186,14 +2206,18 @@ export class GameScene extends Phaser.Scene {
    * CAPTURING state spans.
    */
   updateStarfield(delta) {
-    const speed =
-      this.captureState === CaptureState.CAPTURING
-        ? STARFIELD_SCROLL.capture
-        : this.player.active
-          ? STARFIELD_SCROLL.game
-          : 0;
-    if (this.starfield.rowsPerFrame !== speed) {
-      this.starfield = setStarfieldScroll(this.starfield, speed);
+    // The two live control bytes: star_ctrl+0, the scroll enable the game
+    // holds at 1 while a fighter is on the board (gg1-2_fx.s:1417), and
+    // star_ctrl+1, the tractor-beam reverse. The f_1D76 machine inside
+    // `advanceStarfield` does the rest -- including the re-ramp from zero
+    // after the enable has been down across a death.
+    const enable = this.player.active;
+    const reverse = this.captureState === CaptureState.CAPTURING;
+    if (this.starfield.scrollEnable !== enable) {
+      this.starfield = setStarfieldScrollEnable(this.starfield, enable);
+    }
+    if (this.starfield.reverse !== reverse) {
+      this.starfield = setStarfieldReverse(this.starfield, reverse);
     }
 
     this.starfield = advanceStarfield(this.starfield, delta);
@@ -2253,6 +2277,7 @@ export class GameScene extends Phaser.Scene {
       stage8Switch: this.difficulty.stage8PathSwitch,
       stage12Switch: this.difficulty.stage12BombingSwitch,
       continuousBombing: this.attack?.continuousBombing ?? false,
+      frameCount: this.romFrame ?? 0,
     };
   }
 
@@ -2357,9 +2382,9 @@ export class GameScene extends Phaser.Scene {
       }
       if (enemy.transformLeader) this.revertTransformLeader(enemy);
     } else if (enemy.slot) {
-      // FF with no home: an authored caravan row still selecting one of the
-      // token-free fly-through blocks (until Task 4's stream machine).
-      // Re-enter from the top, the F8/F9 + FB idiom.
+      // FF while still owning a slot: the real combat rows always home via
+      // FB, so this is defensive -- re-enter from the top, the F8/F9 + FB
+      // idiom, rather than strand a formation member off screen.
       enemy.mode = EnemyMode.RETURNING;
       enemy.flight = createFlight(
         returnPath(this.slotPosition(enemy.slot), SCREEN),
