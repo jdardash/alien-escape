@@ -418,6 +418,10 @@ this is purely a rendering gap.
 
 ## 3. What this repo already does better than typical clones
 
+A later, wider survey — covering fidelity-focused recreations as well as casual
+clones, and the feature diff against the closest competitor found — is in
+[comparison-galaga-arcade.md](comparison-galaga-arcade.md).
+
 The clones surveyed, with what was actually inspected:
 
 | Repo | Language | Stars | Tests present? |

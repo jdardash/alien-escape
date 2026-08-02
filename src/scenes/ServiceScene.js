@@ -27,6 +27,8 @@ import {
 } from '../systems/dips.js';
 import { loadRank, saveRank, resolveStorage } from '../systems/persistence.js';
 import { RANK_COUNT, RANK_NAMES } from '../systems/stages.js';
+import { loadSettings, saveSettings, stepVolume } from '../systems/settings.js';
+import { addScanlines } from '../art/crt.js';
 
 const COINAGE_LABELS = {
   [CoinageMode.FREE_PLAY]: 'FREE PLAY',
@@ -65,6 +67,13 @@ export class ServiceScene extends Phaser.Scene {
     this.cursor = 0;
     this.soundIndex = 0;
 
+    // The knobs that are not switches: the volume pot and the monitor
+    // overlay, both applied live so the operator hears and sees the change
+    // from inside the service screen.
+    this.settings = loadSettings(this.storage);
+    this.sound.volume = this.settings.masterVolume;
+    this.scanlineOverlay = this.settings.scanlines ? addScanlines(this, SCREEN) : null;
+
     this.add
       .text(SCREEN.width / 2, 60, 'SERVICE MODE', { font: '28px monospace', fill: '#ff4444' })
       .setOrigin(0.5);
@@ -83,6 +92,8 @@ export class ServiceScene extends Phaser.Scene {
       { label: 'RANK', value: () => RANK_NAMES[this.rank], change: (d) => this.changeRank(d) },
       { label: 'ATTRACT SOUND', value: () => (this.dips.demoSound ? 'ON' : 'OFF'), change: () => this.toggle('demoSound') },
       { label: 'NO-FIRE BUG', value: () => (this.dips.noFireBug ? 'ON' : 'OFF'), change: () => this.toggle('noFireBug') },
+      { label: 'VOLUME', value: () => `${Math.round(this.settings.masterVolume * 10)}/10`, change: (d) => this.changeVolume(d) },
+      { label: 'SCANLINES', value: () => (this.settings.scanlines ? 'ON' : 'OFF'), change: () => this.toggleScanlines() },
       { label: 'SOUND TEST', value: () => SOUND_TEST[this.soundIndex], change: (d) => this.changeSound(d) },
       { label: 'EXIT', value: () => '', change: () => this.exit() },
     ];
@@ -169,6 +180,31 @@ export class ServiceScene extends Phaser.Scene {
 
   toggle(field) {
     this.dips = saveDips(this.storage, { ...this.dips, [field]: !this.dips[field] });
+    this.redraw();
+  }
+
+  changeVolume(direction) {
+    this.settings = saveSettings(this.storage, {
+      ...this.settings,
+      masterVolume: stepVolume(this.settings.masterVolume, direction),
+    });
+    this.sound.volume = this.settings.masterVolume;
+    // Audition the detent: the coin chime is short and the operator knows it.
+    this.sound.play('coin', { volume: 0.5 });
+    this.redraw();
+  }
+
+  toggleScanlines() {
+    this.settings = saveSettings(this.storage, {
+      ...this.settings,
+      scanlines: !this.settings.scanlines,
+    });
+    if (this.settings.scanlines && !this.scanlineOverlay) {
+      this.scanlineOverlay = addScanlines(this, SCREEN);
+    } else if (!this.settings.scanlines && this.scanlineOverlay) {
+      this.scanlineOverlay.destroy();
+      this.scanlineOverlay = null;
+    }
     this.redraw();
   }
 

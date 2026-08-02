@@ -8,6 +8,7 @@ import {
   scoreTableRank,
   recordScore,
 } from '../systems/persistence.js';
+import { applyCabinet } from '../art/crt.js';
 
 /**
  * Results screen, and the board.
@@ -69,6 +70,7 @@ export class GameOverScene extends Phaser.Scene {
 
   create() {
     this.add.rectangle(0, 0, SCREEN.width, SCREEN.height, 0x000000).setOrigin(0);
+    applyCabinet(this, SCREEN);
 
     // The cabinet plays a different tune for taking first place than for taking
     // any other place on the board, and a third for not making it at all. With
@@ -380,6 +382,14 @@ export class GameOverScene extends Phaser.Scene {
         this.scene.start('GameScene', { playerCount: this.results.length }),
       );
       this.input.keyboard.once('keydown-T', () => this.scene.start('TitleScene'));
+
+      // A tap or a pad button is the start button here too.
+      this.input.once('pointerdown', () =>
+        this.scene.start('GameScene', { playerCount: this.results.length }),
+      );
+      this.input.gamepad?.once('down', () =>
+        this.scene.start('GameScene', { playerCount: this.results.length }),
+      );
     });
   }
 }

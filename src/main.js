@@ -24,6 +24,12 @@ const config = {
     default: 'arcade',
     arcade: { gravity: { y: 0 }, debug: false },
   },
+  // The cabinet's stick and button, for anyone holding an actual stick and
+  // button: the plugin is off by default and this is the one place to ask
+  // for it. The pad's mapping is read in `src/systems/controls.js`.
+  input: {
+    gamepad: true,
+  },
   scale: {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,

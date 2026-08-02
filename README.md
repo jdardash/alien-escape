@@ -7,7 +7,7 @@ A Galaga replica where the game rules live in pure, dependency-free ES modules t
 ## [Play it in your browser](https://jdardash.github.io/alien-escape/)
 
 [![CI](https://img.shields.io/github/actions/workflow/status/jdardash/alien-escape/ci.yml?branch=main&label=CI)](https://github.com/jdardash/alien-escape/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-424%20passing-success)](tests/)
+[![Tests](https://img.shields.io/badge/tests-525%20passing-success)](tests/)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Build step](https://img.shields.io/badge/build%20step-none-lightgrey)](index.html)
 
@@ -42,6 +42,8 @@ src/systems/          PURE. No Phaser import. Fully unit tested.
   capture.js          tractor beam capture and rescue state machine
   players.js          two-player alternating turns: whose ship, whose score
   dips.js             the operator's DIP switches: lives, bonus, coinage
+  settings.js         the knobs that are not switches: the volume pot, scanlines
+  controls.js         one stick from three holds: keyboard, gamepad, touch
   demo.js             the pilot that flies the attract screen
   persistence.js      BEST 5 board, high score and difficulty rank via injected storage
   stats.js            shots, hits, hit-miss ratio
@@ -50,6 +52,7 @@ src/art/              PURE. Every ship, drawn as a 16 x 16 pixel grid.
   pixelArt.js         the grids and palettes, plus a strict parser
   textures.js         the one seam that turns a grid into a Phaser texture
   localArt.js         optional local sprite overrides; see docs/local-art.md
+  crt.js              the monitor: master volume and the scanline overlay
 src/audio/            PURE. Every sound, synthesised rather than sampled.
   synth.js            waveforms, envelopes, glides, an LFSR for the noise
   soundBank.js        the spec for all 28 sounds, and the one Phaser seam
@@ -90,7 +93,7 @@ The scenes still do real work, but it is orchestration: create sprites, read inp
 - **Hit-miss ratio** reported at game over, which is what makes the two-bullet limit a scored constraint rather than an annoyance
 - **Per-rank audio**: every rank of enemy has its own cry, a boss surviving its first hit sounds different from one dying, and the gun alternates two samples so a burst does not flatten into a tone. All 28 sounds are synthesised at startup from the specs in [src/audio/soundBank.js](src/audio/soundBank.js) — square, triangle and saw voices over a shift-register noise source, which is the palette the cabinet's own Namco WSG had. Nothing is sampled and nothing is downloaded
 - **The hardware starfield**: four LFSR-generated sets of 63 stars, two lit at a time swapping on a 32-frame blink, streaming during play, drifting in attract, and stopping dead while no fighter is on the board ([src/systems/starfield.js](src/systems/starfield.js))
-- **Operator features**: a service mode on `F2` with the switch block and a sound test, fighters per credit (2/3/4/5), the bonus-fighter schemes, four coinage models with a real coin box (free play from the factory), attract-sound off, and — for the brave — the no-fire bug behind a switch that ships off and voids the scores of any run played after it trips
+- **Operator features**: a service mode on `F2` with the switch block and a sound test, fighters per credit (2/3/4/5), the bonus-fighter schemes, four coinage models with a real coin box (free play from the factory), attract-sound off, the volume pot and an opt-in scanline overlay, a FREEZE switch on `P` that stops the whole machine mid-frame, and — for the brave — the no-fire bug behind a switch that ships off and voids the scores of any run played after it trips
 
 ## Defects found and fixed
 
@@ -110,7 +113,7 @@ These were found by reading the original `GameScene.js` before rewriting it. The
 
 ```bash
 npm install
-npm test        # vitest run  - 491 tests across 22 files
+npm test        # vitest run  - 525 tests across 24 files
 npm run lint    # eslint .
 ```
 
@@ -138,13 +141,18 @@ Because there is no build step, GitHub Pages serves the repository root unchange
 | --- | --- |
 | `A` / `D` or arrow keys | Move |
 | `Space` | Fire |
+| `P` | The FREEZE switch: stop and restart the whole machine mid-frame |
 | `Space` or `1` on the attract screen | Start a one-player game |
 | `2` on the attract screen | Start a two-player game, taking turns |
 | `R` on the attract screen | Cycle the difficulty rank, A to D |
-| `F2` on the attract screen | Service mode: the DIP switch block and the sound test |
+| `F2` on the attract screen | Service mode: the DIP switch block, volume, scanlines and the sound test |
 | `C` on the attract screen | Insert a coin, if the operator has taken the machine off free play |
 
+A gamepad works everywhere the keyboard does: stick or d-pad to move, a face button to fire, and any button is a start button on the attract screen. On a touch screen the first finger is the stick — the fighter chases it — a second finger fires, and a bare tap fires too; a tap on the attract screen is 1P START. The page installs as an app (portrait, like the cabinet's monitor) through `manifest.webmanifest`.
+
 Leave the attract screen alone for half a minute and the machine plays itself, as the cabinet does. Any start button takes the game off it.
+
+How this project compares to every other open-source Galaga on GitHub — including the one other project that attempts ROM-level accuracy — is documented in [docs/comparison-galaga-arcade.md](docs/comparison-galaga-arcade.md).
 
 ## Screenshots
 

@@ -2,8 +2,20 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Alien Escape: a Galaga tribute</title>
+
+    <!--
+      Installable as an app: the manifest gives the page a name, an icon and
+      a portrait orientation, which is what the cabinet's monitor is. There
+      is deliberately no service worker -- the game is a static page and a
+      stale cached copy of it would be worse than a network miss.
+    -->
+    <link rel="manifest" href="manifest.webmanifest" />
+    <meta name="theme-color" content="#000000" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <meta name="apple-mobile-web-app-title" content="Alien Escape" />
 
     <!--
       Inline so the page ships no request the repository cannot answer. Without
