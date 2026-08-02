@@ -23,7 +23,6 @@ export const FONT_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-.,:;!?()[]<>/+=@
 export const GLYPH_SIZE = 8;
 export const FONT_CHARS_PER_ROW = 16;
 
-/* eslint-disable quote-props */
 export const GLYPHS = {
   A: ['..###...', '.#...#..', '#.....#.', '#.....#.', '#######.', '#.....#.', '#.....#.', '........'],
   B: ['######..', '#.....#.', '#.....#.', '######..', '#.....#.', '#.....#.', '######..', '........'],
@@ -83,7 +82,6 @@ export const GLYPHS = {
   '"': ['..#.#...', '..#.#...', '..#.#...', '........', '........', '........', '........', '........'],
   ' ': ['........', '........', '........', '........', '........', '........', '........', '........'],
 };
-/* eslint-enable quote-props */
 
 /** The pixel colour every glyph is drawn in; strings are tinted per use. */
 const GLYPH_COLOR = 0xffffff;

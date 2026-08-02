@@ -133,6 +133,7 @@ import {
   FLAG_DRAWN_WIDTH,
 } from '../art/textures.js';
 import { applyShipArt, localArtFrames, queueLocalArt } from '../art/localArt.js';
+import { arcadeText, installArcadeFont } from '../art/font.js';
 import { installSoundBank } from '../audio/soundBank.js';
 import { queueLocalAudio } from '../audio/localAudio.js';
 import { recordShot, recordHit } from '../systems/stats.js';
@@ -239,6 +240,7 @@ export class GameScene extends Phaser.Scene {
     createShipTextures(this);
     createTransformTextures(this);
     createExplosionTextures(this);
+    installArcadeFont(this);
 
     // The formation-wide wing frame currently showing. One clock for the
     // whole board; see `flapFrameAt`.
@@ -424,29 +426,19 @@ export class GameScene extends Phaser.Scene {
    * what gives the blink on the left something to mean.
    */
   createHud() {
-    const heading = { font: '15px monospace', fill: '#ff4444' };
-    const value = { font: '18px monospace', fill: '#ffffff' };
-    const idle = '#663333';
+    const heading = { tint: 0xff4444 };
+    const value = { tint: 0xffffff };
 
     this.playerHeadings = [
-      this.add.text(20, 12, '1UP', heading).setDepth(20),
-      this.add
-        .text(SCREEN.width - 20, 12, '2UP', heading)
-        .setOrigin(1, 0)
-        .setDepth(20),
+      arcadeText(this, 20, 12, '1UP', heading).setDepth(20),
+      arcadeText(this, SCREEN.width - 20, 12, '2UP', heading).setOrigin(1, 0).setDepth(20),
     ];
 
-    this.add
-      .text(SCREEN.width / 2, 12, 'HIGH SCORE', heading)
-      .setOrigin(0.5, 0)
-      .setDepth(20);
+    arcadeText(this, SCREEN.width / 2, 12, 'HIGH SCORE', heading).setOrigin(0.5, 0).setDepth(20);
 
     this.playerScores = [
-      this.add.text(20, 32, '', value).setDepth(20),
-      this.add
-        .text(SCREEN.width - 20, 32, '', value)
-        .setOrigin(1, 0)
-        .setDepth(20),
+      arcadeText(this, 20, 32, '', value).setDepth(20),
+      arcadeText(this, SCREEN.width - 20, 32, '', value).setOrigin(1, 0).setDepth(20),
     ];
 
     // One blink tween per column, both created up front and paused: a handover
@@ -464,8 +456,8 @@ export class GameScene extends Phaser.Scene {
     );
 
     if (this.session.playerCount < 2) {
-      this.playerHeadings[1].setColor(idle);
-      this.playerScores[1].setColor('#555555');
+      this.playerHeadings[1].setTint(0x663333);
+      this.playerScores[1].setTint(0x555555);
     }
 
     // The rank the operator left the machine on. Drawn small and out of the
@@ -473,11 +465,7 @@ export class GameScene extends Phaser.Scene {
     // switch inside the box -- but a browser has no box, and a player who has
     // set it to D deserves to be told why the first screen is shooting at them.
     if (this.rank > 0) {
-      this.add
-        .text(SCREEN.width / 2, 54, `RANK ${RANK_NAMES[this.rank]}`, {
-          font: '12px monospace',
-          fill: '#886644',
-        })
+      arcadeText(this, SCREEN.width / 2, 54, `RANK ${RANK_NAMES[this.rank]}`, { tint: 0x886644 })
         .setOrigin(0.5, 0)
         .setDepth(20);
     }
@@ -486,17 +474,12 @@ export class GameScene extends Phaser.Scene {
     // every point scored -- can leave a running tween alone instead of
     // restarting it several times a second.
     this.blinkingColumn = -1;
-    this.highScoreText = this.add
-      .text(SCREEN.width / 2, 32, '', { ...value, fill: '#ffcc00' })
+    this.highScoreText = arcadeText(this, SCREEN.width / 2, 32, '', { tint: 0xffcc00 })
       .setOrigin(0.5, 0)
       .setDepth(20);
 
-    this.bannerText = this.add
-      .text(SCREEN.width / 2, SCREEN.height / 2, '', {
-        font: '30px monospace',
-        fill: '#ffffff',
-        align: 'center',
-      })
+    this.bannerText = arcadeText(this, SCREEN.width / 2, SCREEN.height / 2, '', { scale: 2 })
+      .setCenterAlign()
       .setOrigin(0.5)
       .setDepth(30)
       .setVisible(false);
@@ -602,11 +585,10 @@ export class GameScene extends Phaser.Scene {
       this.tweens.pauseAll();
       this.time.paused = true;
       this.sound.pauseAll();
-      this.freezeLabel = this.add
-        .text(SCREEN.width / 2, SCREEN.height / 2, 'FREEZE', {
-          font: '28px monospace',
-          fill: '#44ff88',
-        })
+      this.freezeLabel = arcadeText(this, SCREEN.width / 2, SCREEN.height / 2, 'FREEZE', {
+        tint: 0x44ff88,
+        scale: 1.5,
+      })
         .setOrigin(0.5)
         .setDepth(40);
       return;
@@ -636,11 +618,10 @@ export class GameScene extends Phaser.Scene {
     // Well clear of the row the fighter flies in: the machine's own ship spends
     // the whole demo travelling along the bottom of the screen, and text behind
     // it is text nobody can read.
-    this.demoLabel = this.add
-      .text(SCREEN.width / 2, SCREEN.height * 0.72, 'DEMO PLAY', {
-        font: '20px monospace',
-        fill: '#ffcc00',
-      })
+    this.demoLabel = arcadeText(this, SCREEN.width / 2, SCREEN.height * 0.72, 'DEMO PLAY', {
+      tint: 0xffcc00,
+      scale: 1.5,
+    })
       .setOrigin(0.5)
       .setDepth(30);
 
@@ -652,11 +633,9 @@ export class GameScene extends Phaser.Scene {
       repeat: -1,
     });
 
-    this.add
-      .text(SCREEN.width / 2, SCREEN.height * 0.72 + 28, 'PUSH START BUTTON   1P: SPACE   2P: 2', {
-        font: '14px monospace',
-        fill: '#8899bb',
-      })
+    arcadeText(this, SCREEN.width / 2, SCREEN.height * 0.72 + 30, 'PUSH START BUTTON   1P: SPACE   2P: 2', {
+      tint: 0x8899bb,
+    })
       .setOrigin(0.5)
       .setDepth(30);
 
