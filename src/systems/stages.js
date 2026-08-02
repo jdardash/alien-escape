@@ -8,7 +8,7 @@
  * them can stay aggressive.
  */
 
-import { CHALLENGING_PATTERN_COUNT, diveVectorFor } from './paths.js';
+import { CHALLENGING_PATTERN_COUNT } from './paths.js';
 import { ENTRANCE_PATTERN_COUNT, EnemyType, FORMATION_SIZE } from './formation.js';
 import {
   CARAVAN_ROW_COUNT,
@@ -21,11 +21,7 @@ import {
   combatStageIndex,
   normalizeRank,
 } from './caravans.js';
-import {
-  DIFFICULTY_STAGE_ROWS,
-  difficultyRow,
-  difficultyRowIndex,
-} from './difficulty.js';
+import { DIFFICULTY_STAGE_ROWS, difficultyRow } from './difficulty.js';
 
 export {
   CHALLENGING_PATTERN_COUNT,
@@ -161,10 +157,8 @@ export function entrancePatternFor(stage, rank = DifficultyRank.A) {
  * initial timers plus reloads recomputed every frame from the live board,
  * which is `attack.js`'s job now.
  *
- * The one authored knob left is `diveSpeed`, the tween multiplier for the
- * scene's current dive geometry, from the per-stage flight vectors in
- * `paths.js` with a small rank term on top. Task 3 replaces that geometry
- * with the ROM's path bytecode, at which point it goes too.
+ * Nor is there a dive-speed scalar any more: dive speed lives in the attack
+ * tables' own per-segment nibbles, which the path interpreter runs directly.
  *
  * There is deliberately no rate of fire for the formation. In the arcade an
  * enemy only ever bombs while it is flying, on its way in or on an attack run;
@@ -172,14 +166,7 @@ export function entrancePatternFor(stage, rank = DifficultyRank.A) {
  * whole grid a threat at all times and flattened the rhythm the dives create.
  */
 export function stageDifficulty(stage, rank = DifficultyRank.A) {
-  const level = normalizeRank(rank);
-  const row = difficultyRow(stage, level);
-  const { speed } = diveVectorFor(EnemyType.ZAKO, difficultyRowIndex(stage));
-
-  return {
-    ...row,
-    diveSpeed: Math.round((speed / 8.2 + level * 0.05) * 100) / 100,
-  };
+  return { ...difficultyRow(stage, normalizeRank(rank)) };
 }
 
 /**

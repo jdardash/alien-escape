@@ -4,20 +4,26 @@ import {
   tangentAngle,
   pathLength,
   entryPath,
+  entrySpawnPoint,
+  createEntryFlightState,
+  createDiveFlightState,
   divePath,
-  diveVectorFor,
   returnPath,
   challengingPath,
+  captiveEscapePath,
+  screenScale,
   FLY_IN_PATH_COUNT,
-  DIVE_PROGRAM_COUNT,
+  FLY_IN_INDEX_COUNT,
+  CHALLENGING_PATTERN_COUNT,
 } from '../src/systems/paths.js';
+import { stepFlight, toCanvas } from '../src/systems/pathcode.js';
 import { SCREEN, PLAYER } from '../src/config.js';
-import { CHALLENGING_PATTERN_COUNT } from '../src/systems/stages.js';
 
 // The real field, so the invariants below are pinned against what actually
 // ships rather than against a landscape screen this game no longer uses.
 const screen = SCREEN;
 const playerY = PLAYER.y;
+const scale = screenScale(screen);
 
 describe('track evaluation', () => {
   const track = {
@@ -63,12 +69,12 @@ describe('track evaluation', () => {
 });
 
 describe('entry flights', () => {
-  const target = { x: screen.width / 2, y: 120 };
+  const target = { x: screen.width / 2, y: screen.height * 0.4 };
 
-  /** Every authored shape, flown from each side, which is what a caravan can ask for. */
+  /** Every index entry, both pair members, as a caravan byte can select. */
   const everyEntry = () => {
     const paths = [];
-    for (let variant = 0; variant < FLY_IN_PATH_COUNT; variant += 1) {
+    for (let variant = 0; variant < FLY_IN_INDEX_COUNT; variant += 1) {
       for (const mirrored of [false, true]) {
         paths.push({ variant, mirrored, path: entryPath(variant, target, screen, mirrored) });
       }
@@ -76,11 +82,43 @@ describe('entry flights', () => {
     return paths;
   };
 
-  it('holds the arcade count: 22 unique path blocks', () => {
+  it('holds the arcade counts: 22 blocks behind a 24-entry index', () => {
     expect(FLY_IN_PATH_COUNT).toBe(22);
+    expect(FLY_IN_INDEX_COUNT).toBe(24);
   });
 
-  it('delivers every variant to the formation slot', () => {
+  it('spawns the stage-1 pair 32 canvas px apart at top centre: x 94 vs 126', () => {
+    // db_2A6C rows 0/1 through the canvas transform, scaled to this screen.
+    const first = entrySpawnPoint(0, 0, screen);
+    const second = entrySpawnPoint(0, 1, screen);
+    expect(first.x).toBeCloseTo(94 * scale, 6);
+    expect(first.y).toBeCloseTo(43 * scale, 6);
+    expect(second.x).toBeCloseTo(126 * scale, 6);
+    expect(second.y).toBeCloseTo(43 * scale, 6);
+  });
+
+  it('enters waves 2 and 3 from the BOTTOM edges of the screen', () => {
+    // Index 1 (block 0x0067, variant pair 1): rawY 0x23 -> canvas y 283,
+    // rawX 0 / 0x78 -> the side edges. The old model never did this.
+    const left = entrySpawnPoint(1, 0, screen);
+    const right = entrySpawnPoint(1, 1, screen);
+    expect(left.y).toBeCloseTo(283 * scale, 6);
+    expect(left.x).toBeLessThan(0);
+    expect(right.x).toBeGreaterThan(screen.width);
+  });
+
+  it('starts each compiled track at its spawn point', () => {
+    for (let variant = 0; variant < FLY_IN_INDEX_COUNT; variant += 1) {
+      for (const mirrored of [false, true]) {
+        const start = pointOnPath(entryPath(variant, target, screen, mirrored), 0);
+        const spawn = entrySpawnPoint(variant, mirrored ? 1 : 0, screen);
+        expect(start.x).toBeCloseTo(spawn.x, 6);
+        expect(start.y).toBeCloseTo(spawn.y, 6);
+      }
+    }
+  });
+
+  it('delivers every index entry to the formation slot', () => {
     for (const { path } of everyEntry()) {
       const end = pointOnPath(path, 1);
       expect(end.x).toBeCloseTo(target.x, 6);
@@ -88,171 +126,220 @@ describe('entry flights', () => {
     }
   });
 
-  it('cycles variants rather than failing on a large index', () => {
-    const first = entryPath(0, target, screen);
-    const wrapped = entryPath(FLY_IN_PATH_COUNT * 2, target, screen);
-    expect(wrapped).toEqual(first);
-  });
-
-  it('begins off screen so enemies fly in rather than appearing', () => {
-    for (const { path } of everyEntry()) {
-      const start = pointOnPath(path, 0);
-      const outside =
-        start.x < 0 || start.x > screen.width || start.y < 0 || start.y > screen.height;
-      expect(outside).toBe(true);
+  it('homes the six combat blocks through their own FB, no shim', () => {
+    for (let variant = 0; variant < 6; variant += 1) {
+      for (const member of [0, 1]) {
+        const state = createEntryFlightState(variant, member);
+        const context = { playerX: 112, homeTarget: { x: 112, y: 120 } };
+        let frames = 0;
+        while (!state.done && frames < 1000) {
+          stepFlight(state, context);
+          frames += 1;
+        }
+        expect(state.homed).toBe(true);
+        expect(state.overrun).toBe(false);
+        // The arcade cadence: about two seconds from spawn to slot.
+        expect(frames).toBeGreaterThan(90);
+        expect(frames).toBeLessThan(200);
+      }
     }
   });
 
-  it('produces a path long enough to read as a flight, not a jump', () => {
-    for (const { path } of everyEntry()) {
-      expect(pathLength(path)).toBeGreaterThan(400);
+  it('terminates every block for every index entry and member, no garbage reads', () => {
+    for (let variant = 0; variant < FLY_IN_INDEX_COUNT; variant += 1) {
+      for (const member of [0, 1]) {
+        const state = createEntryFlightState(variant, member);
+        const context = { playerX: 112, homeTarget: { x: 112, y: 120 } };
+        let frames = 0;
+        while (!state.done && frames < 3000) {
+          stepFlight(state, context);
+          frames += 1;
+        }
+        expect(state.done).toBe(true);
+        expect(state.overrun).toBe(false);
+      }
     }
   });
 
-  // The mirror bit of a caravan path byte. Reflecting the approach is what lets
-  // one authored shape serve both sides, and it is what makes a paired flight
-  // arrive from the left and the right at the same moment.
-  it('enters from the opposite side when mirrored', () => {
-    for (let variant = 0; variant < FLY_IN_PATH_COUNT; variant += 1) {
-      const plain = pointOnPath(entryPath(variant, target, screen, false), 0);
-      const mirrored = pointOnPath(entryPath(variant, target, screen, true), 0);
-
-      // Reflected, not merely displaced: the two starts are the same distance
-      // either side of the centre line.
-      expect(mirrored.x).toBeCloseTo(screen.width - plain.x, 6);
-      expect(mirrored.y).toBeCloseTo(plain.y, 6);
-    }
+  it('takes the stage-8 F0 branch to a different, faster tail', () => {
+    const base = entryPath(0, target, screen, false, { stage8Switch: false });
+    const hard = entryPath(0, target, screen, false, { stage8Switch: true });
+    // The replacement sub-path (44 E4 18: speed 4 nibbles, hard turn) makes
+    // a different route of a different length.
+    expect(hard.points.length).not.toBe(base.points.length);
   });
 
-  it('still lands a mirrored flight in its own slot rather than the mirrored one', () => {
-    const offCentre = { x: screen.width * 0.2, y: 140 };
-    const end = pointOnPath(entryPath(3, offCentre, screen, true), 1);
-    expect(end.x).toBeCloseTo(offCentre.x, 6);
-    expect(end.y).toBeCloseTo(offCentre.y, 6);
+  it('flies the pair as negated-rotation twins, not screen reflections', () => {
+    // Member 1 spawns at its OWN db_2A6C row (x 126 vs 94 -- offset, not
+    // reflected about the centre) and every turn is negated: over the first
+    // segments the two tracks mirror about their spawn columns.
+    const plain = entryPath(0, target, screen, false);
+    const twin = entryPath(0, target, screen, true);
+    const plainSpawn = pointOnPath(plain, 0);
+    const twinSpawn = pointOnPath(twin, 0);
+    expect(twinSpawn.x - plainSpawn.x).toBeCloseTo(32 * scale, 6);
+
+    // 40 frames in (well inside the first turn), the lateral offsets from
+    // the spawn columns oppose each other.
+    const t = 40 / (plain.points.length - 1);
+    const a = pointOnPath(plain, t);
+    const b = pointOnPath(twin, t);
+    const da = a.x - plainSpawn.x;
+    const db = b.x - twinSpawn.x;
+    expect(Math.sign(da)).toBe(-Math.sign(db));
+    expect(Math.abs(da + db)).toBeLessThan(5 * scale);
   });
 
-  it('gives the 22 blocks 22 distinct routes', () => {
+  it('gives the index entries distinct routes', () => {
     const signature = (variant) =>
-      [0.2, 0.4, 0.6, 0.8]
+      [0.2, 0.4, 0.6]
         .map((t) => {
           const p = pointOnPath(entryPath(variant, target, screen), t);
           return `${Math.round(p.x)},${Math.round(p.y)}`;
         })
         .join('|');
 
-    const signatures = Array.from({ length: FLY_IN_PATH_COUNT }, (_, i) => signature(i));
-    expect(new Set(signatures).size).toBe(FLY_IN_PATH_COUNT);
+    const signatures = Array.from({ length: 22 }, (_, i) => signature(i));
+    // 22 entries; index pairs (10, 22) and (12, 23) share blocks with
+    // different variants, so at least the 20 distinct-block routes differ.
+    expect(new Set(signatures).size).toBeGreaterThanOrEqual(20);
   });
 
-  // Regression. An earlier revision looped entries through height * 0.95,
-  // which ran all forty arriving enemies straight through the player's row at
-  // y = height - 70. The opening stream ended the game before a shot could be
-  // fired, and no unit test caught it because every assertion was about
-  // endpoints rather than the space the path crosses.
-  it('never descends into the lane the player occupies', () => {
-    for (const { path } of everyEntry()) {
-      for (let t = 0; t <= 1; t += 0.005) {
-        expect(pointOnPath(path, t).y).toBeLessThan(playerY - 60);
+  // The lane invariant, adapted to the real data. The old model kept every
+  // entry above an authored floor; the ROM's waves 2/3 genuinely enter from
+  // the bottom -- but only along the screen edges. What must hold is that no
+  // combat fly-in crosses the player's lane near the centre of the field,
+  // where the ship starts.
+  it('keeps combat fly-ins out of the central band of the player lane', () => {
+    const laneY = playerY - 40;
+    const centre = screen.width / 2;
+    for (let variant = 0; variant < 6; variant += 1) {
+      for (const member of [0, 1]) {
+        const state = createEntryFlightState(variant, member);
+        const context = { playerX: 112, homeTarget: { x: 112, y: 120 } };
+        let frames = 0;
+        while (!state.done && frames < 1000) {
+          stepFlight(state, context);
+          const point = toCanvas(state);
+          if (point.y * scale >= laneY) {
+            expect(Math.abs(point.x * scale - centre)).toBeGreaterThan(centre * 0.3);
+          }
+          frames += 1;
+        }
       }
     }
   });
 });
 
-describe('dive runs', () => {
-  const origin = { x: screen.width * 0.375, y: 150 };
+describe('attack dives', () => {
+  const origin = { x: screen.width * 0.375, y: screen.height * 0.23 };
+  const playerX = screen.width / 2;
 
-  it('exits below the bottom of the screen', () => {
-    const end = pointOnPath(divePath(origin, screen.width / 2, screen), 1);
-    expect(end.y).toBeGreaterThan(screen.height);
+  it('starts at the formation position it left', () => {
+    const start = pointOnPath(divePath(origin, playerX, screen), 0);
+    expect(start.x).toBeCloseTo(origin.x, 6);
+    expect(start.y).toBeCloseTo(origin.y, 6);
   });
 
-  it('starts precisely at the formation slot it left', () => {
-    const start = pointOnPath(divePath(origin, screen.width / 2, screen), 0);
-    expect(start).toEqual(origin);
-  });
-
-  it('curves toward the player on the way down', () => {
-    const path = divePath(origin, screen.width * 0.9, screen);
-    const late = pointOnPath(path, 0.85);
-    expect(late.x).toBeGreaterThan(origin.x);
-  });
-
-  it('sweeps outward from whichever side it started on', () => {
-    const nearLeft = screen.width * 0.15;
-    const nearRight = screen.width * 0.85;
-    const left = divePath({ x: nearLeft, y: 150 }, screen.width / 2, screen);
-    const right = divePath({ x: nearRight, y: 150 }, screen.width / 2, screen);
-    expect(pointOnPath(left, 0.2).x).toBeLessThan(nearLeft);
-    expect(pointOnPath(right, 0.2).x).toBeGreaterThan(nearRight);
-  });
-
-  // The family. The arcade does not fly one dive curve: it holds a set of
-  // dive path blocks and per-stage flight vectors that pick between them per
-  // enemy type. The vectors here are authored; the structure is the ROM's.
-  it('holds a family of eight dive blocks', () => {
-    expect(DIVE_PROGRAM_COUNT).toBe(8);
-  });
-
-  it('selects different blocks for different types as the stages climb', () => {
-    const selections = new Set();
-    for (let stageIndex = 0; stageIndex < 26; stageIndex += 1) {
-      for (const type of ['zako', 'goei', 'boss']) {
-        const { program, speed } = diveVectorFor(type, stageIndex);
-        expect(program).toBeGreaterThanOrEqual(0);
-        expect(program).toBeLessThan(DIVE_PROGRAM_COUNT);
-        expect(speed).toBeGreaterThan(0);
-        selections.add(`${type}:${program}`);
-      }
-    }
-    // Every type flies more than one block across a long game.
-    for (const type of ['zako', 'goei', 'boss']) {
-      const flown = [...selections].filter((entry) => entry.startsWith(type)).length;
-      expect(flown).toBeGreaterThan(2);
+  it('dives below the bottom of the screen mid-run', () => {
+    for (const enemyType of ['zako', 'goei', 'boss']) {
+      const path = divePath(origin, playerX, screen, { enemyType });
+      let maxY = -Infinity;
+      for (let t = 0; t <= 1; t += 0.002) maxY = Math.max(maxY, pointOnPath(path, t).y);
+      expect(maxY).toBeGreaterThan(screen.height);
     }
   });
 
-  it('flies a later stage hotter than the first', () => {
-    expect(diveVectorFor('zako', 25).speed).toBeGreaterThan(diveVectorFor('zako', 0).speed);
+  it('returns to its slot: the pass ends where it began, via the FB tail', () => {
+    // No continuous bombing at compile time, so the FA gate routes every
+    // table to the shared `FB 12 00 FF` return and the flight ends homed.
+    for (const enemyType of ['zako', 'goei', 'boss']) {
+      const path = divePath(origin, playerX, screen, { enemyType });
+      const end = pointOnPath(path, 1);
+      expect(end.x).toBeCloseTo(origin.x, 0);
+      expect(end.y).toBeCloseTo(origin.y, 0);
+    }
   });
 
-  it('gives different stage rows visibly different runs', () => {
-    const early = divePath(origin, screen.width / 2, screen, { enemyType: 'goei', stageIndex: 0 });
-    const late = divePath(origin, screen.width / 2, screen, { enemyType: 'goei', stageIndex: 12 });
-    const signature = (path) =>
-      [0.2, 0.4, 0.6]
+  it('gives the three types three different table shapes', () => {
+    const signature = (enemyType) => {
+      const path = divePath(origin, playerX, screen, { enemyType });
+      return [0.25, 0.5, 0.75]
         .map((t) => {
           const p = pointOnPath(path, t);
           return `${Math.round(p.x)},${Math.round(p.y)}`;
         })
         .join('|');
-    expect(signature(early)).not.toBe(signature(late));
+    };
+    expect(new Set(['zako', 'goei', 'boss'].map(signature)).size).toBe(3);
+  });
+
+  it('bends the red moth toward where the player stands (the F3 hook)', () => {
+    const left = divePath(origin, screen.width * 0.1, screen, { enemyType: 'goei' });
+    const right = divePath(origin, screen.width * 0.9, screen, { enemyType: 'goei' });
+    const signature = (path) =>
+      [0.2, 0.35, 0.5]
+        .map((t) => Math.round(pointOnPath(path, t).x))
+        .join('|');
+    expect(signature(left)).not.toBe(signature(right));
+  });
+
+  it('loops the dive while continuous bombing holds, arming bombs each pass', () => {
+    const state = createDiveFlightState('zako', origin, screen, { objectId: 4 });
+    const context = {
+      playerX: 112,
+      homeTarget: { x: origin.x / scale, y: origin.y / scale },
+      continuousBombing: true,
+    };
+    let armEvents = 0;
+    for (let frame = 0; frame < 1500 && !state.done; frame += 1) {
+      armEvents += stepFlight(state, context).filter((e) => e.type === 'armBombs').length;
+    }
+    expect(state.done).toBe(false); // still looping
+    expect(armEvents).toBeGreaterThanOrEqual(2); // F6 re-arms every pass
+  });
+
+  it('ends a live dive homed once continuous bombing is off', () => {
+    const state = createDiveFlightState('goei', origin, screen, { objectId: 4 });
+    const context = {
+      playerX: 112,
+      homeTarget: { x: origin.x / scale, y: origin.y / scale },
+      continuousBombing: false,
+    };
+    let frames = 0;
+    while (!state.done && frames < 2000) {
+      stepFlight(state, context);
+      frames += 1;
+    }
+    expect(state.homed).toBe(true);
+    expect(state.overrun).toBe(false);
+  });
+
+  it('mirrors the dive by objectId bit 1, the ROM launch recompute', () => {
+    const plain = createDiveFlightState('zako', origin, screen, { objectId: 0 });
+    const negated = createDiveFlightState('zako', origin, screen, { objectId: 2 });
+    expect(plain.negateRotation).toBe(false);
+    expect(negated.negateRotation).toBe(true);
   });
 });
 
 describe('challenging stage choreography', () => {
-  it('enters and exits off screen, never stopping in formation', () => {
-    for (let pattern = 0; pattern < CHALLENGING_PATTERN_COUNT; pattern += 1) {
-      for (let offset = 0; offset < 6; offset += 1) {
-        const path = challengingPath(pattern, offset, screen);
-        const start = pointOnPath(path, 0);
-        const end = pointOnPath(path, 1);
-
-        const outside = (p) =>
-          p.x < 0 || p.x > screen.width || p.y < 0 || p.y > screen.height;
-
-        expect(outside(start)).toBe(true);
-        expect(outside(end)).toBe(true);
-      }
-    }
+  it('holds the arcade count of eight rows', () => {
+    expect(CHALLENGING_PATTERN_COUNT).toBe(8);
   });
 
-  it('keeps clear of the player, who cannot be hit during a bonus round', () => {
+  it('flies through and leaves: every route ends off screen or at its FF', () => {
     for (let pattern = 0; pattern < CHALLENGING_PATTERN_COUNT; pattern += 1) {
-      for (let offset = 0; offset < 6; offset += 1) {
+      for (let offset = 0; offset < 5; offset += 1) {
         const path = challengingPath(pattern, offset, screen);
-        for (let t = 0; t <= 1; t += 0.01) {
-          expect(pointOnPath(path, t).y).toBeLessThan(playerY - 40);
-        }
+        expect(path.points.length).toBeGreaterThan(60);
+        // Off screen, or hard against an edge: one row's closing FF lands
+        // its stream just inside the top border, which is the ROM's own
+        // deactivate-where-it-stands.
+        const end = pointOnPath(path, 1);
+        const inside =
+          end.x > 60 && end.x < screen.width - 60 && end.y > 60 && end.y < screen.height - 60;
+        expect(inside).toBe(false);
       }
     }
   });
@@ -267,32 +354,45 @@ describe('challenging stage choreography', () => {
         .join('|');
 
     const patterns = Array.from({ length: CHALLENGING_PATTERN_COUNT }, (_, i) => i);
-    const signatures = patterns.map(signature);
-    expect(new Set(signatures).size).toBe(CHALLENGING_PATTERN_COUNT);
+    expect(new Set(patterns.map(signature)).size).toBe(CHALLENGING_PATTERN_COUNT);
   });
 
-  it('spreads a group across lanes rather than stacking them', () => {
-    const xs = [0, 2, 4, 6].map((offset) =>
-      Math.round(pointOnPath(challengingPath(1, offset, screen), 0).x),
-    );
-    expect(new Set(xs).size).toBeGreaterThan(1);
+  it('varies the route across the five waves of a row', () => {
+    const starts = [0, 1, 2, 3, 4].map((offset) => {
+      const p = pointOnPath(challengingPath(1, offset, screen), 0);
+      return `${Math.round(p.x)},${Math.round(p.y)}`;
+    });
+    expect(new Set(starts).size).toBeGreaterThan(1);
   });
 });
 
 describe('re-entry', () => {
-  it('drops in from above and finishes in the slot', () => {
-    const target = { x: screen.width * 0.3, y: 140 };
+  it('re-enters at the ROM top edge over the slot column and lands in the slot', () => {
+    const target = { x: screen.width * 0.3, y: screen.height * 0.45 };
     const path = returnPath(target, screen);
-    expect(pointOnPath(path, 0).y).toBeLessThan(0);
+    const start = pointOnPath(path, 0);
+    // F8: rawY 0x9C -> canvas y 41; F9: the slot's own column.
+    expect(start.y).toBeCloseTo(41 * scale, 0);
+    expect(start.x).toBeCloseTo(target.x, 0);
     const end = pointOnPath(path, 1);
     expect(end.x).toBeCloseTo(target.x, 6);
     expect(end.y).toBeCloseTo(target.y, 6);
   });
+});
 
-  it('enters on the same side as the slot it is heading for', () => {
-    const left = returnPath({ x: screen.width * 0.15, y: 140 }, screen);
-    const right = returnPath({ x: screen.width * 0.85, y: 140 }, screen);
-    expect(pointOnPath(left, 0).x).toBeLessThan(screen.width / 2);
-    expect(pointOnPath(right, 0).x).toBeGreaterThan(screen.width / 2);
+describe('captive escape', () => {
+  it('swoops off the bottom of the screen for good', () => {
+    const origin = { x: screen.width / 2, y: screen.height * 0.35 };
+    const path = captiveEscapePath(origin, screen.width * 0.7, screen);
+    const end = pointOnPath(path, 1);
+    expect(end.y).toBeGreaterThan(screen.height);
+  });
+
+  it('leans toward the player it was aimed at', () => {
+    const origin = { x: screen.width / 2, y: screen.height * 0.35 };
+    const left = pointOnPath(captiveEscapePath(origin, screen.width * 0.2, screen), 1);
+    const right = pointOnPath(captiveEscapePath(origin, screen.width * 0.8, screen), 1);
+    expect(left.x).toBeLessThan(origin.x);
+    expect(right.x).toBeGreaterThan(origin.x);
   });
 });

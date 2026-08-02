@@ -5,7 +5,16 @@ import {
   flightProgress,
   isFlightComplete,
   flightTransform,
+  createLiveFlight,
+  advanceLiveFlight,
+  liveFlightTransform,
+  isLiveFlight,
+  isLiveFlightDone,
+  liveFlightHomed,
 } from '../src/systems/flight.js';
+import { createEntryFlightState, screenScale } from '../src/systems/paths.js';
+import { FRAME_MS } from '../src/systems/pathcode.js';
+import { SCREEN } from '../src/config.js';
 
 /** A straight run rightward, so headings are easy to reason about. */
 const straight = {
@@ -83,5 +92,73 @@ describe('transform', () => {
     };
     const flight = advanceFlight(createFlight(downward, 1000), 500);
     expect(flightTransform(flight).angle).toBeCloseTo(0, 5);
+  });
+});
+
+describe('live flights', () => {
+  const context = {
+    playerX: SCREEN.width / 2,
+    homeTarget: { x: SCREEN.width / 2, y: SCREEN.height * 0.4 },
+  };
+
+  it('wraps an interpreter state for this screen and knows itself', () => {
+    const flight = createLiveFlight(createEntryFlightState(0, 0), SCREEN);
+    expect(isLiveFlight(flight)).toBe(true);
+    expect(isLiveFlight(createFlight({ kind: 'track', points: [{ x: 0, y: 0 }] }, 100))).toBe(
+      false,
+    );
+  });
+
+  it('starts at the spawn point, in screen coordinates', () => {
+    const flight = createLiveFlight(createEntryFlightState(0, 0), SCREEN);
+    const { x, y } = liveFlightTransform(flight);
+    const scale = screenScale(SCREEN);
+    expect(x).toBeCloseTo(94 * scale, 6);
+    expect(y).toBeCloseTo(43 * scale, 6);
+  });
+
+  it('does not mutate the flight it is given', () => {
+    const flight = createLiveFlight(createEntryFlightState(0, 0), SCREEN);
+    const before = liveFlightTransform(flight);
+    advanceLiveFlight(flight, 500, context);
+    expect(liveFlightTransform(flight)).toEqual(before);
+  });
+
+  it('runs whole hardware frames and is frame-rate independent', () => {
+    let coarse = createLiveFlight(createEntryFlightState(0, 0), SCREEN);
+    coarse = advanceLiveFlight(coarse, 100 * FRAME_MS, context).flight;
+
+    let fine = createLiveFlight(createEntryFlightState(0, 0), SCREEN);
+    for (let i = 0; i < 100; i += 1) fine = advanceLiveFlight(fine, FRAME_MS, context).flight;
+
+    const a = liveFlightTransform(coarse);
+    const b = liveFlightTransform(fine);
+    expect(a.x).toBeCloseTo(b.x, 6);
+    expect(a.y).toBeCloseTo(b.y, 6);
+  });
+
+  it('flies an entry to its slot and reports homed completion', () => {
+    let flight = createLiveFlight(createEntryFlightState(0, 0), SCREEN);
+    let events = [];
+    for (let i = 0; i < 300 && !isLiveFlightDone(flight); i += 1) {
+      const step = advanceLiveFlight(flight, FRAME_MS, context);
+      flight = step.flight;
+      events = events.concat(step.events);
+    }
+    expect(isLiveFlightDone(flight)).toBe(true);
+    expect(liveFlightHomed(flight)).toBe(true);
+    expect(events.some((e) => e.type === 'homed')).toBe(true);
+    const { x, y } = liveFlightTransform(flight);
+    expect(x).toBeCloseTo(context.homeTarget.x, 4);
+    expect(y).toBeCloseTo(context.homeTarget.y, 4);
+  });
+
+  it('orients the sprite from the live 10-bit angle, art-up convention', () => {
+    // The stage-1 block spawns pointing canvas-down: rotation 0 for
+    // down-facing travel under the same convention flightTransform uses.
+    const flight = createLiveFlight(createEntryFlightState(0, 0), SCREEN);
+    const { angle } = liveFlightTransform(flight);
+    const normalized = ((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+    expect(normalized).toBeCloseTo(0, 5);
   });
 });

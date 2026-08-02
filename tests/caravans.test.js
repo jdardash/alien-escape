@@ -23,8 +23,12 @@ describe('the fly-in path byte', () => {
     expect(decodeFlyInByte(0xc5).pathIndex).toBe(5);
   });
 
-  it('reads bit 6 as the mirror flag', () => {
-    expect(decodeFlyInByte(0x01).mirrored).toBe(false);
+  it('reads bit 6 as the pair member and the negate-rotation flag', () => {
+    expect(decodeFlyInByte(0x01).member).toBe(0);
+    expect(decodeFlyInByte(0x01).negateRotation).toBe(false);
+    expect(decodeFlyInByte(0x41).member).toBe(1);
+    expect(decodeFlyInByte(0x41).negateRotation).toBe(true);
+    // The historical field name rides along, same bit.
     expect(decodeFlyInByte(0x41).mirrored).toBe(true);
   });
 
@@ -34,16 +38,29 @@ describe('the fly-in path byte', () => {
   });
 
   it('decodes the arcade stage-1 bytes the way the sourced entrance describes', () => {
-    // `0x00 / 0xC0` is the first flight of the arcade's own stage 1: the same
-    // shape on both sides, with the second member ungated so it launches
-    // alongside the first. That is the sourced "enemies enter from both sides
-    // of the screen at the same time" and it is the check that the bit layout
-    // is being read the right way round.
+    // `0x00 / 0xC0` is the first flight of the arcade's own stage 1: both
+    // members fly index 0 (block 0x001D), the second as the pair partner --
+    // its own spawn triplet 32 canvas px to the right, every turn negated --
+    // and ungated, so it launches alongside the first. That is the sourced
+    // "enemies enter from both sides at the same time", and the check that
+    // the bit layout is read the right way round.
     const first = decodeFlyInByte(0x00);
     const second = decodeFlyInByte(0xc0);
 
-    expect(first).toEqual({ pathIndex: 0, mirrored: false, immediate: false });
-    expect(second).toEqual({ pathIndex: 0, mirrored: true, immediate: true });
+    expect(first).toEqual({
+      pathIndex: 0,
+      member: 0,
+      negateRotation: false,
+      mirrored: false,
+      immediate: false,
+    });
+    expect(second).toEqual({
+      pathIndex: 0,
+      member: 1,
+      negateRotation: true,
+      mirrored: true,
+      immediate: true,
+    });
   });
 });
 

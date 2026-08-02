@@ -49,11 +49,14 @@ import {
   FORMATION_SIZE,
 } from '../systems/formation.js';
 import {
-  entryPath,
   divePath,
   returnPath,
   challengingPath,
   captiveEscapePath,
+  entrySpawnPoint,
+  createEntryFlightState,
+  createDiveFlightState,
+  pointOnPath,
 } from '../systems/paths.js';
 import {
   createFlight,
@@ -61,6 +64,12 @@ import {
   isFlightComplete,
   flightProgress,
   flightTransform,
+  createLiveFlight,
+  advanceLiveFlight,
+  liveFlightTransform,
+  isLiveFlight,
+  isLiveFlightDone,
+  liveFlightHomed,
 } from '../systems/flight.js';
 import {
   BOMB_ARM_FRAMES,
@@ -851,7 +860,9 @@ export class GameScene extends Phaser.Scene {
 
       group.members.forEach(({ slotIndex, pathVariant, mirrored, step }) => {
         const slot = slots[slotIndex];
-        const start = entryPath(pathVariant, this.slotPosition(slot), SCREEN, mirrored).points[0];
+        // Spawn where the db_2A6C variant row puts this pair member: bit 6
+        // of the wave byte picks the member AND negates its rotations.
+        const start = entrySpawnPoint(pathVariant, mirrored ? 1 : 0, SCREEN);
         const enemy = createEnemy(this, this.enemies, slot, start, this.flapFrame);
         // An arriving ship gets at most one shot on the way in, and only from
         // stage 2. Interim: the ROM masks fly-in bombing per creature through
@@ -863,13 +874,13 @@ export class GameScene extends Phaser.Scene {
 
         this.time.delayedCall(groupDelay + step * FORMATION.entryStaggerMs, () => {
           if (!enemy.active) return;
-          // Built at launch, not at spawn: the last flight sets off ten
-          // seconds after the first, by which time the formation has breathed
-          // and swayed away from where its slots were.
-          enemy.flight = createFlight(
-            entryPath(pathVariant, this.slotPosition(slot), SCREEN, mirrored),
-            FORMATION.entryDurationMs,
-          );
+          // A LIVE flight on the ROM's path machine: the block flies its
+          // segments and the FB turn-home glides onto the slot's live,
+          // swaying position, fed in as homeTarget every frame. Formation
+          // object ids stay clear of the transient window (0x38-0x3E) so
+          // the F7 gate never fires for a formation member; Task 4's
+          // caravan machine launches the real transients through it.
+          enemy.flight = createLiveFlight(createEntryFlightState(pathVariant, mirrored ? 1 : 0), SCREEN);
         });
       });
     });
@@ -935,7 +946,13 @@ export class GameScene extends Phaser.Scene {
       const path = challengingPath(pattern, group.index, SCREEN);
 
       group.slotIndices.forEach((slotIndex, position) => {
-        const enemy = createEnemy(this, this.enemies, slots[slotIndex], path[0][0], this.flapFrame);
+        const enemy = createEnemy(
+          this,
+          this.enemies,
+          slots[slotIndex],
+          pointOnPath(path, 0),
+          this.flapFrame,
+        );
         enemy.mode = EnemyMode.PASSING;
 
         this.time.delayedCall(groupDelay + position * CHALLENGING.staggerMs, () => {
@@ -1180,14 +1197,17 @@ export class GameScene extends Phaser.Scene {
     // field on the 20-frame spacing.
     enemy.bombMask = this.enemiesArmed() ? this.attack.bombFlags : 0;
     enemy.bombCountdownMs = BOMB_ARM_FRAMES * FRAME_MS;
-    // Which block the dive flies and how hot comes from the per-stage flight
-    // vectors, the arcade's own per-type selection.
-    enemy.flight = createFlight(
-      divePath({ x: enemy.x, y: enemy.y }, this.player.x, SCREEN, {
-        enemyType: enemy.enemyType,
-        stageIndex: this.round,
+    // A LIVE flight on the type's own attack table (yellow/red/boss with
+    // its entry offset): speed lives in the table's nibbles, the F3/FE
+    // hooks read the player every frame, the FA gate loops the pass while
+    // the scheduler holds continuous bombing, and the FB tail glides it
+    // back onto its slot. Mirroring is the ROM's objectId-bit-1 recompute,
+    // stood in by the slot parity until Task 4 assigns real object ids.
+    enemy.flight = createLiveFlight(
+      createDiveFlightState(enemy.enemyType, { x: enemy.x, y: enemy.y }, SCREEN, {
+        negateRotation: (enemy.slot?.index ?? 0) % 2 === 1,
       }),
-      DIVE.durationMs / this.difficulty.diveSpeed,
+      SCREEN,
     );
   }
 
@@ -1459,11 +1479,19 @@ export class GameScene extends Phaser.Scene {
     if (!this.captor || !this.captor.active) return;
     captive.setPosition(this.captor.x, this.captor.y + CAPTURE.captiveOffsetY);
 
+    // The captor's dives run live on the path machine with no fixed
+    // duration, so "far enough into the run" is read off its descent for a
+    // live flight and off track progress for a compiled one.
+    const committed = (flight) =>
+      isLiveFlight(flight)
+        ? this.captor.y >= SCREEN.height * 0.35
+        : flightProgress(flight) >= DIVE.bombAtProgress;
+
     const readyToBomb =
       captiveCanBomb(this.captureState, isDiving(this.captor)) &&
       !captive.hasBombed &&
       this.captor.flight &&
-      flightProgress(this.captor.flight) >= DIVE.bombAtProgress;
+      committed(this.captor.flight);
 
     if (readyToBomb) {
       captive.hasBombed = true;
@@ -1978,7 +2006,28 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * The live context the path machine's reactive tokens read each frame:
+   * the swaying slot for the FB home glide and the F9/F1 re-entries, the
+   * player for FE/F3/F4, the difficulty row's F0/EF switches, and the
+   * scheduler's continuous-bombing flag for the FA loop gate.
+   */
+  liveFlightContext(enemy) {
+    return {
+      playerX: this.player.x,
+      homeTarget: enemy.slot ? this.slotPosition(enemy.slot) : undefined,
+      stage8Switch: this.difficulty.stage8PathSwitch,
+      stage12Switch: this.difficulty.stage12BombingSwitch,
+      continuousBombing: this.attack?.continuousBombing ?? false,
+    };
+  }
+
   advanceEnemyFlight(enemy, delta) {
+    if (isLiveFlight(enemy.flight)) {
+      this.advanceLiveEnemyFlight(enemy, delta);
+      return;
+    }
+
     enemy.flight = advanceFlight(enemy.flight, delta);
     const { x, y, angle } = flightTransform(enemy.flight);
     enemy.setPosition(x, y);
@@ -1987,33 +2036,7 @@ export class GameScene extends Phaser.Scene {
     // enemy is or what it hits changes -- just what the rotation looks like.
     enemy.setRotation(quantizeHeading(angle));
 
-    // The ROM's bomb release, not an aim band: the countdown armed at launch
-    // expires every 20 frames and shifts the drop bitmask one bit; a
-    // shifted-out set bit is a bomb, released only once the bomber is low in
-    // the field and the player can be shot at. A set bit is held while the
-    // bomber is still high -- the corpus's compensation for a replica
-    // descent slower than the Z80's. Dodging works because each bomb's aim
-    // is frozen at its drop (see `fireEnemyBullet`).
-    //
-    // A transform bonus ship flies `PASSING` because it never joins a
-    // formation, but it is making an attack run, not a fly-past: the trio is
-    // the highest-value target on the board and an unarmed one would be a free
-    // 1,480 points. Challenging-stage enemies are `PASSING` too and are the
-    // genuinely harmless case; they never have bombs to spend.
-    const bombing =
-      enemy.mode === EnemyMode.DIVING ||
-      enemy.mode === EnemyMode.ENTERING ||
-      enemy.transformSet !== undefined;
-    if (bombing && enemy.bombMask > 0) {
-      enemy.bombCountdownMs = (enemy.bombCountdownMs ?? BOMB_ARM_FRAMES * FRAME_MS) - delta;
-      if (enemy.bombCountdownMs <= 0) {
-        enemy.bombCountdownMs = BOMB_SPACING_FRAMES * FRAME_MS;
-        const isLow = enemy.y >= BOMB_DROP_MIN_Y * ROM_TO_SCREEN && this.player.active;
-        const { mask, drop } = nextBombDrop(enemy.bombMask, isLow);
-        enemy.bombMask = mask;
-        if (drop) this.fireEnemyBullet(enemy);
-      }
-    }
+    this.updateEnemyBombs(enemy, delta);
 
     if (!isFlightComplete(enemy.flight)) return;
 
@@ -2039,6 +2062,86 @@ export class GameScene extends Phaser.Scene {
 
       default:
         enemy.flight = null;
+    }
+  }
+
+  /**
+   * One frame of a flight running live on the ROM's path machine: entries
+   * flying their blocks onto the swaying grid, and dives running the attack
+   * tables against the live player.
+   */
+  advanceLiveEnemyFlight(enemy, delta) {
+    const { flight, events } = advanceLiveFlight(
+      enemy.flight,
+      delta,
+      this.liveFlightContext(enemy),
+    );
+    enemy.flight = flight;
+    const { x, y, angle } = liveFlightTransform(flight);
+    enemy.setPosition(x, y);
+    enemy.setRotation(quantizeHeading(angle));
+
+    for (const event of events) {
+      // F6 free flight re-arms the bomb string on every pass, exactly as
+      // j_108A does at launch: the countdown and this frame's d_0909 mask.
+      // The capture-aim and clone-split events are Task 5's machines.
+      if (event.type === 'armBombs' && this.enemiesArmed()) {
+        enemy.bombMask = this.attack.bombFlags;
+        enemy.bombCountdownMs = BOMB_ARM_FRAMES * FRAME_MS;
+      }
+    }
+
+    this.updateEnemyBombs(enemy, delta);
+
+    if (!isLiveFlightDone(enemy.flight)) return;
+
+    if (liveFlightHomed(enemy.flight) && enemy.slot) {
+      // The FB glide snapped onto the slot -- entries and finished dives
+      // both end here; the dive tables carry their own top re-entry.
+      settleIntoFormation(enemy, this.slotPosition(enemy.slot));
+    } else if (enemy.slot) {
+      // FF with no home: an authored caravan row still selecting one of the
+      // token-free fly-through blocks (until Task 4's stream machine).
+      // Re-enter from the top, the F8/F9 + FB idiom.
+      enemy.mode = EnemyMode.RETURNING;
+      enemy.flight = createFlight(
+        returnPath(this.slotPosition(enemy.slot), SCREEN),
+        DIVE.returnDurationMs,
+      );
+    } else {
+      enemy.destroy();
+    }
+  }
+
+  /**
+   * The ROM's bomb release, not an aim band: the countdown armed at launch
+   * expires every 20 frames and shifts the drop bitmask one bit; a
+   * shifted-out set bit is a bomb, released only once the bomber is low in
+   * the field and the player can be shot at. A set bit is held while the
+   * bomber is still high -- the corpus's compensation for a replica
+   * descent slower than the Z80's. Dodging works because each bomb's aim
+   * is frozen at its drop (see `fireEnemyBullet`).
+   *
+   * A transform bonus ship flies `PASSING` because it never joins a
+   * formation, but it is making an attack run, not a fly-past: the trio is
+   * the highest-value target on the board and an unarmed one would be a free
+   * 1,480 points. Challenging-stage enemies are `PASSING` too and are the
+   * genuinely harmless case; they never have bombs to spend.
+   */
+  updateEnemyBombs(enemy, delta) {
+    const bombing =
+      enemy.mode === EnemyMode.DIVING ||
+      enemy.mode === EnemyMode.ENTERING ||
+      enemy.transformSet !== undefined;
+    if (!bombing || enemy.bombMask <= 0) return;
+
+    enemy.bombCountdownMs = (enemy.bombCountdownMs ?? BOMB_ARM_FRAMES * FRAME_MS) - delta;
+    if (enemy.bombCountdownMs <= 0) {
+      enemy.bombCountdownMs = BOMB_SPACING_FRAMES * FRAME_MS;
+      const isLow = enemy.y >= BOMB_DROP_MIN_Y * ROM_TO_SCREEN && this.player.active;
+      const { mask, drop } = nextBombDrop(enemy.bombMask, isLow);
+      enemy.bombMask = mask;
+      if (drop) this.fireEnemyBullet(enemy);
     }
   }
 

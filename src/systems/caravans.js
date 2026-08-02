@@ -9,21 +9,26 @@
  * port ignores and two *path bytes*, one for the even members of the flight and
  * one for the odd ones.
  *
- * A path byte is where the interesting part lives:
+ * A path byte is where the interesting part lives (gg1-3.s:1450-1458 and the
+ * decoder at :1718-1894):
  *
  * ```
- *   bits 0-5   which fly-in path to fly
- *   bit  6     mirror it: enter from the other side of the screen
- *   bit  7     launch gate -- 0 waits for the next beat, 1 goes immediately
+ *   bits 0-5   index into db_2A3C -- which of the 24 path-table entries
+ *   bit  6     pair member: spawn from the SECOND db_2A6C triplet of the
+ *              entry's variant pair, AND negate every rotation byte the
+ *              member loads (flag 0x13 bit 7) -- the mirrored wishbone
+ *   bit  7     launch gate -- clear waits for the frame & 7 beat (the
+ *              trailing pair member), set fires immediately
  * ```
  *
- * That single byte is what makes the three entrances a player can *name*
- * ("both sides at once", "single file from the left") fall out of the data
- * rather than being special-cased. A flight whose two path bytes are both
- * gated arrives single file. A flight whose second byte is ungated launches it
- * alongside the first, so the eight arrive as four pairs -- and if that second
- * byte also has bit 6 set, the pair comes in from opposite sides at the same
- * moment, which is the sourced description of the first entrance pattern.
+ * That single byte is what makes the entrances a player can *name* ("both
+ * sides at once", "single file from the left") fall out of the data rather
+ * than being special-cased. Bit 6 is not a screen reflection: the partner
+ * starts at its own spawn triplet (stage 1's pair sits at canvas x 94 and
+ * 126, 32 px apart at top centre) and flies the same block with the turns
+ * negated. Bit 0 is also double-read by the launcher as the fly-in
+ * bomb-counter seed (0 -> 0x08 top entrant, 1 -> 0x44 side entrant), which
+ * Task 4's caravan machine wires up.
  *
  * ## What here is the arcade's and what is not
  *
@@ -45,25 +50,32 @@
  * into flights, and `paths.js` owns what a path index actually looks like.
  */
 
-/** Bits 0-5 of a path byte: which fly-in path this member flies. */
+/** Bits 0-5 of a path byte: the db_2A3C entry this member flies. */
 const PATH_MASK = 0x3f;
 
-/** Bit 6: enter from the mirrored side of the screen. */
-const MIRROR_BIT = 0x40;
+/** Bit 6: second pair member -- own spawn triplet plus negated rotation. */
+const MEMBER_BIT = 0x40;
 
-/** Bit 7: launch now rather than waiting for the next beat. */
+/** Bit 7: launch now rather than waiting for the frame & 7 beat. */
 const IMMEDIATE_BIT = 0x80;
 
 /**
  * Unpack one path byte.
  *
- * Returns the three things a launching member needs and nothing else, so the
- * bit layout stops at this function and every caller downstream reads fields.
+ * Returns what a launching member needs and nothing else, so the bit layout
+ * stops at this function and every caller downstream reads fields.
+ * `mirrored` is kept as the historical name for bit 6, documented truthfully
+ * now: it selects the variant pair's second spawn triplet and sets the
+ * negate-rotation flag; `member`/`negateRotation` carry the same bit under
+ * the ROM's own meaning for the path layer.
  */
 export function decodeFlyInByte(byte) {
+  const member = (byte & MEMBER_BIT) !== 0 ? 1 : 0;
   return {
     pathIndex: byte & PATH_MASK,
-    mirrored: (byte & MIRROR_BIT) !== 0,
+    member,
+    negateRotation: member === 1,
+    mirrored: member === 1,
     immediate: (byte & IMMEDIATE_BIT) !== 0,
   };
 }
