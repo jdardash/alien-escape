@@ -1,6 +1,6 @@
 # Architecture
 
-A technical companion to the [README](../README.md). This covers the module boundary and why it is drawn where it is, how a single frame flows through the codebase, how formation placement and Bezier path generation work, and what the testing strategy covers and deliberately does not.
+A technical companion to the [README](../README.md). This covers the module boundary and why it is drawn where it is, how a single frame flows through the codebase, how formation placement and the path bytecode interpreter work, and what the testing strategy covers and deliberately does not.
 
 ## The layering
 
@@ -15,6 +15,7 @@ graph TD
         TITLE["TitleScene"]
         GAME["GameScene<br/>sprites, input, collisions, timers"]
         OVER["GameOverScene"]
+        SVC["ServiceScene<br/>the DIP switch block"]
         ENT["src/entities/enemy.js<br/>sprite construction"]
     end
 
@@ -22,12 +23,17 @@ graph TD
         CFG["src/config.js<br/>tuning constants"]
         FORM["formation.js"]
         CARAVAN["caravans.js<br/>the 13 entrance rows"]
-        PATHS["paths.js"]
+        PATHCODE["pathcode.js<br/>the bytecode interpreter"]
+        PATHS["paths.js<br/>every path, as a byte program"]
         FLIGHT["flight.js"]
+        DIFF["difficulty.js<br/>4 x 26 x 10 parameter table"]
+        ATTACK["attack.js<br/>launch counters, no-fire"]
+        STARS["starfield.js<br/>the 63-star LFSR field"]
         SCORE["scoring.js"]
         STAGE["stages.js"]
         CAP["capture.js"]
         PLAY["players.js<br/>two-player turns"]
+        DIPS["dips.js<br/>the operator's switches"]
         DEMO["demo.js<br/>the attract pilot"]
         PERS["persistence.js"]
         STATS["stats.js"]
@@ -37,13 +43,14 @@ graph TD
     end
 
     subgraph tests["tests/ - vitest, headless"]
-        T["17 test files, 424 tests"]
+        T["22 test files, 491 tests"]
     end
 
     HTML --> MAIN
     MAIN --> TITLE
     MAIN --> GAME
     MAIN --> OVER
+    MAIN --> SVC
     GAME --> ENT
     GAME --> CFG
     GAME --> FORM
@@ -58,12 +65,21 @@ graph TD
     GAME --> STATS
     GAME --> AUDIO
     GAME --> SYNTH
+    GAME --> ATTACK
+    GAME --> STARS
+    GAME --> DIPS
     TITLE --> PERS
     TITLE --> SYNTH
+    TITLE --> STARS
+    TITLE --> DIPS
+    SVC --> DIPS
     OVER --> STATS
     FLIGHT --> PATHS
+    PATHS --> PATHCODE
     SCORE --> FORM
     STAGE --> CARAVAN
+    STAGE --> DIFF
+    ATTACK --> DIFF
     FORM --> CARAVAN
     AUDIO --> SYNTH
 
@@ -129,17 +145,20 @@ Forty small object allocations per frame is not a cost worth optimising against 
 
 ## How a frame flows
 
-`GameScene.update(_time, delta)` is deliberately short. It scrolls the background and then delegates:
+`GameScene.update(_time, delta)` is deliberately short. It advances the starfield and then delegates:
 
 ```js
 update(_time, delta) {
   if (this.isGameOver) return;
 
-  this.background.tilePositionY -= 0.6;
+  this.updateStarfield(delta);
   this.formationElapsed += delta;
 
   this.updateFormation(delta);
-  this.updatePlayer(delta);
+  this.updateAttacks(delta);   // per-type launch counters; see attack.js
+  this.updateDiveSound();
+  this.updatePlayer();
+  this.updateCaptive(delta);
   this.updateBeam(delta);
   this.cullProjectiles();
   this.checkStageComplete();
@@ -186,7 +205,7 @@ Three properties are worth calling out.
 **Positions are derived, not accumulated.** An enemy sitting in formation has its position recomputed from its slot every frame:
 `clampFormationCentre(...)` then `slotWorldPosition(slot, layout)`. Nothing integrates a velocity, so there is no drift, and forty sprites cannot desynchronise from each other. The original code moved sprites incrementally and needed an O(n^2) anti-overlap pass to correct the resulting drift. Deriving positions removes both the drift and the pass.
 
-**Time is delta-driven, never per-frame-probability.** Both enemy fire and bomb release were originally rolled with `Math.random() < chance` once per enemy per frame, which tied difficulty to display refresh rate - the same stage was roughly twice as hard at 144Hz as at 60Hz. Formation fire is now a timer at `stageDifficulty(stage).formationFireIntervalMs`. Whether a diver bombs at all is decided once when its run begins, and it releases at a fixed point along the path (`flightProgress >= 0.3`), so the behaviour is identical at any frame rate.
+**Time is delta-driven, never per-frame-probability.** Both enemy fire and bomb release were originally rolled with `Math.random() < chance` once per enemy per frame, which tied difficulty to display refresh rate - the same stage was roughly twice as hard at 144Hz as at 60Hz. Attack launches now come from the per-type countdown counters in `attack.js`, decremented by the frame delta; a diver carries its continuous-bomb allowance from the difficulty row and releases from the aim band over the player's column with a fixed reload between shots. All of it is arithmetic on `delta`, so the behaviour is identical at any frame rate.
 
 **Collisions are the one place the scene owns a rule.** `registerCollisions()` holds the guard that makes Challenging Stages safe:
 
@@ -236,61 +255,34 @@ halfWidth = ((FORMATION_COLUMNS - 1) / 2) * spacingX * breathScale
 
 and it centres rather than returning an inverted range on a screen too narrow to hold the grid.
 
-**Slot assignment** happens at stage start. `launchFormation()` walks the 40 slots in order and, for each, computes the world target, generates an entry path ending exactly at that target, and stages the launch:
+**Slot assignment** happens at stage start. `launchFormation()` decodes the stage's caravan row into five flights of eight (`buildEntryGroups` in `formation.js`), and every member arrives carrying which of the 22 fly-in blocks it flies, whether the block is mirrored, and the launch beat it goes on. The enemy carries its `slot` for the rest of its life: a diver that survives its run flies a `returnPath` computed from that same slot and settles back into it.
+
+## The path bytecode interpreter
+
+Galaga's enemies are not driven by curves. The ROM stores each flight shape as a *path block* - byte pairs of `[signed turn delta, frame count]` behind a terminator, 256 heading units to the circle - and an interpreter turns the ship by the delta and advances it at its speed once per frame. `src/systems/pathcode.js` is that interpreter; the cubic Bezier chains earlier revisions flew are gone.
 
 ```js
-buildFormationSlots().forEach((slot, index) => {
-  const target = this.slotPosition(slot);
-  const path = entryPath(index % 4, target, SCREEN);
-  const enemy = createEnemy(this, this.enemies, slot, path[0][0]);
-  this.time.delayedCall(index * FORMATION.entryStaggerMs, () => {
-    if (!enemy.active) return;
-    enemy.flight = createFlight(path, FORMATION.entryDurationMs);
-  });
-});
+// One interpreter frame: turn, then advance.
+state.heading += turn;
+const direction = headingToVector(state.heading);   // 0 up, 64 right, 128 down
+state.x += direction.x * state.speed;
+state.y += direction.y * state.speed;
 ```
 
-The `index % 4` cycles the four entry choreographies, and `index * entryStaggerMs` spaces the launches so a wave streams in rather than materialising at once. The enemy carries its `slot` for the rest of its life: a diver that survives its run flies a `returnPath` computed from that same slot and settles back into it.
+Programs are compiled to a **track** - one sampled point per arcade frame at 60.606 Hz - rather than run live against sprites, so the rest of the game keeps its pure `pointOnPath(track, t)` interface and the interpreter stays testable without a clock. Linear interpolation between two adjacent samples is exactly what the cabinet shows between two adjacent frames.
 
-## Bezier path generation
+Flights have the ROM's two-phase structure: the path block flies the authored shape, and when it runs out the ship steers onto its destination with a clamped turn rate (`compileHoming`). A target that falls inside the turning circle can never be reached by steering toward it - greedy pursuit orbits it forever - so the homing phase steers *away* until the target is outside the circle, then comes around. Entry flights home onto their formation slot; dives home onto an exit point below the screen aimed at where the player was when the run launched - committed, not tracking, which is what makes dodging a dive a matter of reading it early.
 
-A path is a list of cubic segments, each `[p0, p1, p2, p3]`. Evaluating at `t` in `[0, 1]` walks the whole chain.
+### The path families
 
-```js
-export function pointOnPath(path, t) {
-  const clamped = Math.min(Math.max(t, 0), 1);
-  if (clamped === 1) {
-    const last = path[path.length - 1];
-    return { x: last[3].x, y: last[3].y };
-  }
-  const scaled = clamped * path.length;
-  const index = Math.floor(scaled);
-  const local = scaled - index;
-  const [p0, p1, p2, p3] = path[index];
-  return cubicBezier(p0, p1, p2, p3, local);
-}
-```
-
-Two decisions here are worth the words:
-
-**`t` is distributed evenly across segments, not by arc length.** Arc-length parameterisation would require building and caching a length table per path. Segments are instead authored to similar lengths, which keeps the visual speed even at O(1) per frame. `pathLength()` exists for sampling arc length when a flight duration needs tuning against a path, but it is not on the hot path.
-
-**`t === 1` is special-cased** to land on the final segment's endpoint rather than indexing one past the end of the array. Without it, an enemy completing its entry flight would read `path[path.length]`.
-
-`tangentAngle()` computes heading by sampling `t - epsilon` and `t + epsilon` rather than differentiating analytically. At a segment boundary the analytic derivative is discontinuous - the two adjacent cubics can have different tangents - and a sprite would visibly snap. The numeric sample straddles the seam and produces a usable heading through it. `flightTransform()` then subtracts a quarter turn, because the ship art points up while the path tangent is measured from the positive x axis.
-
-### The four path families
-
-| Generator | Shape | Terminates |
+| Generator | Data behind it | Terminates |
 | --- | --- | --- |
-| `entryPath(variant, target, screen)` | Four choreographies: in from left, in from right, top-left sweep, top-right sweep. Each loops before assembling | Exactly at the formation slot |
-| `divePath(origin, playerX, screen)` | Peel out of formation, sweep away from the nearest edge, curve back toward the player's current x | Off the bottom of the screen |
-| `returnPath(target, screen)` | Straight-ish re-entry from the top, on the side nearest the slot | Exactly at the formation slot |
-| `challengingPath(pattern, offset, screen)` | Four preset routes: crossing streams, vertical loop, wide arc, figure eight | Off screen; never in a slot |
+| `entryPath(variant, target, screen, mirrored)` | 22 authored fly-in blocks - the ROM's own count - each mirrorable about the centre line by the caravan byte's bit 6 | Exactly at the formation slot |
+| `divePath(origin, playerX, screen, {enemyType, stageIndex})` | A family of eight dive blocks, selected by 26 rows of per-stage flight vectors, one column per enemy type, with per-row speed | Off the bottom of the screen |
+| `returnPath(target, screen)` | A short drop program plus homing, on the side nearest the slot | Exactly at the formation slot |
+| `challengingPath(pattern, offset, screen)` | Eight preset route programs; no homing phase at all - the whole route is the block | Off screen; never in a slot |
 
-`ENTRY_FLOOR_FRACTION = 0.58` is a constant with a bug behind it, documented in the source. An earlier revision looped entry paths through `height * 0.95`, which routed all forty arriving enemies through the player's row and ended the game during the opening stream before a shot could be fired. The test `entry flights > never descends into the lane the player occupies` in `tests/paths.test.js` pins the invariant so the constant cannot silently drift back.
-
-`divePath` picks its sweep direction from which half of the screen the origin sits in (`origin.x < width / 2 ? -1 : 1`), so divers always arc away from the nearer edge before turning in. The second segment aims its control points at `playerX` captured at dive time - the run is committed, not homing, which is what makes dodging a dive a matter of reading it early.
+`ENTRY_FLOOR_FRACTION = 0.62` is a constant with a bug behind it, documented in the source. An earlier revision looped entry paths through `height * 0.95`, which routed all forty arriving enemies through the player's row and ended the game during the opening stream before a shot could be fired. The test `entry flights > never descends into the lane the player occupies` in `tests/paths.test.js` pins the invariant for all 22 blocks on both sides, so the data cannot silently drift back.
 
 ## Capture as a state machine
 
@@ -328,25 +320,30 @@ npm test        # vitest run
 npm run lint    # eslint .
 ```
 
-424 tests across 17 files, one per pure module. Roughly:
+491 tests across 22 files, one per pure module. Roughly:
 
 | File | Tests | Focus |
 | --- | --- | --- |
-| `tests/synth.test.js` | 28 | Waveforms, envelopes, note names, exponential glides, a deterministic noise source, and that nothing renders outside [-1, 1] |
-| `tests/soundBank.test.js` | 24 | Every sound audible and distinct, the per-rank cries, the boss survived-vs-died pair, the two looping sounds rejoining without a click |
-| `tests/stages.test.js` | 67 | Challenging-stage cadence, difficulty ramp and plateau, the four difficulty ranks, entrance rows, the transform cycle, flag denominations, the 255 rollover |
+| `tests/stages.test.js` | 67 | Challenging-stage cadence, the difficulty table read-through, the four ranks, entrance rows, the transform cycle, flag denominations, the 255 rollover |
 | `tests/persistence.test.js` | 51 | The BEST 5 board and the stored difficulty rank: ranking, ties, insertion, initials, corrupt values, missing keys, throwing storage, memory fallback |
 | `tests/formation.test.js` | 32 | Slot counts and types, grid-to-world placement, breathing phase, centre clamping, entry-flight grouping and launch beats |
+| `tests/paths.test.js` | 30 | Track evaluation, all 22 fly-in blocks on both sides, the dive family and its flight vectors, the entry-floor invariant, the eight challenging routes |
 | `tests/capture.test.js` | 29 | State transitions, ignored events, reset, bullet limit, the rescue rule, whether a captive may bomb |
 | `tests/pixelArt.test.js` | 29 | Grid parsing, ship sizes, centre-line symmetry, distinct silhouettes, recolours that stay pixel-identical |
-| `tests/paths.test.js` | 29 | Bezier evaluation, segment-boundary continuity, tangent behaviour, path endpoints, mirroring, the entry-floor invariant |
-| `tests/scoring.test.js` | 23 | Formation vs diving values, boss escort multipliers, transform sets, extra-life thresholds |
+| `tests/synth.test.js` | 28 | Waveforms, envelopes, note names, exponential glides, a deterministic noise source, and that nothing renders outside [-1, 1] |
+| `tests/scoring.test.js` | 27 | Formation vs diving values, boss escort multipliers, transform sets, the bonus-fighter schemes |
+| `tests/soundBank.test.js` | 24 | Every sound audible and distinct, the per-rank cries, the boss survived-vs-died pair, the two looping sounds rejoining without a click |
 | `tests/caravans.test.js` | 20 | The path-byte encoding, the 13 caravan rows, the arcade's stage-1 row byte for byte, the rank-indexed selector |
 | `tests/players.test.js` | 17 | Two-player turns: whose ship, whose score, retiring one player while the other flies on |
 | `tests/demo.test.js` | 17 | The attract pilot: aiming, dodging bombs, leaving an open beam, not chasing across the field |
 | `tests/localArt.test.js` | 17 | Manifest parsing for local sprite overrides, and the damaged-boss tint |
+| `tests/attack.test.js` | 15 | Per-type launch counters, the active-bomber ceiling and ramp, the transform pull, the no-fire bug's trigger conditions |
 | `tests/audio.test.js` | 14 | Per-rank death sounds, the alternating gun, and that no audio file is ever committed to the repository |
+| `tests/dips.test.js` | 13 | The switch block's defaults, round-trip and validation, the bonus columns, the coin box |
+| `tests/pathcode.test.js` | 12 | The interpreter: decoding, straight runs, full circles, homing with the turn clamp and the unreachable-target escape, mirroring |
+| `tests/difficulty.test.js` | 11 | The 4 x 26 x 10 table's shape, monotonicity in both dimensions, the stage-8 reload switch, the stage-1 enable flags |
 | `tests/flight.test.js` | 11 | Delta accumulation, clamping at completion, transform output |
+| `tests/starfield.test.js` | 11 | The LFSR's period, 63 stars a set, blink alternation, scroll wrap, stop and reverse |
 | `tests/localAudio.test.js` | 9 | Manifest parsing for local sound overrides: unknown names, non-filenames, path traversal |
 | `tests/stats.test.js` | 7 | Ratio math, zero-shot case, formatting |
 

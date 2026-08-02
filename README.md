@@ -31,12 +31,17 @@ src/config.js         tuning constants in one place
 src/systems/          PURE. No Phaser import. Fully unit tested.
   formation.js        40-slot grid, breathing, sway, entry flights
   caravans.js         the 13 entrance rows, in the arcade's own path-byte encoding
-  paths.js            Bezier entry, dive, return and challenging-stage paths
+  pathcode.js         the path bytecode interpreter: per-frame heading deltas
+  paths.js            every flight path as a byte program: 22 fly-ins, 8 dives, more
   flight.js           frame-rate-independent traversal of a path
-  scoring.js          score tables, extra-life thresholds
+  difficulty.js       the 4-rank x 26-stage x 10-parameter difficulty table
+  attack.js           per-type launch counters, transform pull, the no-fire bug
+  starfield.js        the 63-star LFSR hardware field: scroll, stop, blink
+  scoring.js          score tables, extra-life schemes
   stages.js           stage progression, difficulty rank, transform cycle, rollover
   capture.js          tractor beam capture and rescue state machine
   players.js          two-player alternating turns: whose ship, whose score
+  dips.js             the operator's DIP switches: lives, bonus, coinage
   demo.js             the pilot that flies the attract screen
   persistence.js      BEST 5 board, high score and difficulty rank via injected storage
   stats.js            shots, hits, hit-miss ratio
@@ -51,7 +56,7 @@ src/audio/            PURE. Every sound, synthesised rather than sampled.
   localAudio.js       optional local sound overrides; see docs/local-audio.md
 src/entities/         sprite construction helpers
 src/scenes/           Phaser-aware. Thin orchestration.
-  TitleScene.js  GameScene.js  GameOverScene.js
+  TitleScene.js  GameScene.js  GameOverScene.js  ServiceScene.js
 tests/                vitest, headless, no canvas
 ```
 
@@ -62,14 +67,14 @@ Why it pays off:
 - **The rules are readable on their own.** Whether a Challenging Stage lands on stage 7 is answered by one function in `src/systems/stages.js`, not by tracing a scene's `update()`.
 - **CI is trivial.** Lint and test, node only, no headless browser in the workflow. See [.github/workflows/ci.yml](.github/workflows/ci.yml).
 
-The scenes still do real work, but it is orchestration: create sprites, read input, register collisions, and ask the systems layer what should happen. A deeper walkthrough of the frame flow, the formation math, and the Bezier path generation is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The scenes still do real work, but it is orchestration: create sprites, read input, register collisions, and ask the systems layer what should happen. A deeper walkthrough of the frame flow, the formation math, and the path bytecode interpreter is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Galaga mechanics implemented
 
 - **40-slot formation**: 4 Boss Galaga, 16 Goei, 20 Zako across five rows of a 10-column grid
-- **Entrance patterns fixed per stage**, each flown as five flights of eight, selected on the arcade's own cycle: `combatStageIndex` reproduces the ROM's index arithmetic — seventeen rows, counting combat stages only, wrapping past stage 23 by four. Three shapes are authored where the cabinet stores thirteen, so the *schedule* is authentic and the full shape vocabulary is not. One of the three is the arcade's both-sides entrance, which pairs its arrivals two to a step while the other two stay single file
+- **Entrance patterns fixed per stage**, each flown as five flights of eight, selected on the arcade's own cycle: `combatStageIndex` reproduces the ROM's index arithmetic — seventeen rows, counting combat stages only, wrapping past stage 23 by four. All thirteen caravan rows exist and they select across **22 fly-in path blocks**, the cabinet's own count, each a byte program of per-frame heading deltas run through the interpreter in [src/systems/pathcode.js](src/systems/pathcode.js). Row 0 is the arcade's stage-1 row byte for byte: pairs from both sides, then single file
 - **Formation breathing and sway**: the grid expands and contracts horizontally while drifting, clamped so the outermost column never leaves the screen
-- **Dive attacks**: enemies peel out of formation along curved runs aimed at the player, exit through the bottom, and re-enter from the top back into their slot. Nothing ever fires from inside the formation, no more than eight enemy shots exist at once, and stage 1 does not bomb at all — the arcade's opening difficulty row has its bomb flags at zero, so the first screen can only kill you by flying into you
+- **Dive attacks from a family of eight dive blocks**, selected per enemy type by per-stage flight vectors, launched by per-type counters out of the difficulty table rather than by a timer: each type has its own cadence, the air holds only so many attackers, that ceiling rises as a stage drags on, and the counters reload from the faster reload vectors from stage 8. Attackers release up to their continuous-bomb allowance from the aim band over your column. Nothing ever fires from inside the formation, no more than eight enemy shots exist at once, and stage 1 does not bomb at all — the opening difficulty row has its bomb flags at zero, so the first screen can only kill you by flying into you
 - **Tractor beam capture**: a Boss Galaga breaks formation, descends into your half of the field *aiming at your column*, opens a beam, and pulls the fighter in; you lose a life but the ship is held above its captor. Captures are gated the way the arcade gates them — never on stage 1, never during a bonus round, and never once the formation is down to a handful
 - **A captive that fights back**: the held ship bombs you on its captor's dive, and if you shoot that captor while it is still in formation the ship breaks loose, swoops at your column, fires once and is gone for good
 - **Dual fighter rescue**: destroy the captor *while it is diving* and the ship docks, giving a double-width fighter with doubled firepower and a four-bullet limit instead of two. The second ship is a real hitbox, so the upgrade is paid for
@@ -77,13 +82,15 @@ The scenes still do real work, but it is orchestration: create sprites, read inp
 - **Challenging Stages** on stage 3 and every fourth stage after: eight distinct routes, five waves of eight, one rank of enemy plus four Boss Galaga, no firing and no diving, and clearing all forty pays a perfect bonus
 - **Transform bonus enemies** from stage 4: a Zako pulsates and becomes a trio of Scorpions, Bosconian Spy Ships or Galaxian Flagships, worth 160 each and 1,000 to 3,000 more for the completed set. They attack on the way past, which is what the points are for
 - **Authentic scoring**: a target is worth more diving than in formation, and a diving boss is worth more again depending on how many Goei escort it down
-- **Extra lives** at the arcade's factory thresholds (20,000, then 70,000, then every 70,000)
+- **Extra lives** on whichever bonus-fighter scheme the DIP switches select — the factory scheme is 20,000, then 70,000, then every 70,000, and the sheet includes schemes that stop after two awards, a harder column for a two-fighter machine, and one that pays nothing
 - **Stage flags** in the greedy largest-first denominations the arcade uses, drawn as flags
 - **The stage counter rolls over**: the stage after 255 is announced as stage 0, exactly as the arcade's single-byte counter does
 - **An attract mode**, not a title screen: the cabinet's own loop of logo, the `-- SCORE --` chart of what every enemy is worth in formation and attacking (including the boss escort tiers), the extra-ship ladder, and the board — over a `CREDIT` line and `PUSH START BUTTON`. Every figure on the chart is read from `scoreFor()` as it is drawn, so it cannot drift from the table it documents
 - **A BEST 5 board with initials entry**: a run that makes the top five is asked for three initials, and the board survives a reload
 - **Hit-miss ratio** reported at game over, which is what makes the two-bullet limit a scored constraint rather than an annoyance
 - **Per-rank audio**: every rank of enemy has its own cry, a boss surviving its first hit sounds different from one dying, and the gun alternates two samples so a burst does not flatten into a tone. All 28 sounds are synthesised at startup from the specs in [src/audio/soundBank.js](src/audio/soundBank.js) — square, triangle and saw voices over a shift-register noise source, which is the palette the cabinet's own Namco WSG had. Nothing is sampled and nothing is downloaded
+- **The hardware starfield**: four LFSR-generated sets of 63 stars, two lit at a time swapping on a 32-frame blink, streaming during play, drifting in attract, and stopping dead while no fighter is on the board ([src/systems/starfield.js](src/systems/starfield.js))
+- **Operator features**: a service mode on `F2` with the switch block and a sound test, fighters per credit (2/3/4/5), the bonus-fighter schemes, four coinage models with a real coin box (free play from the factory), attract-sound off, and — for the brave — the no-fire bug behind a switch that ships off and voids the scores of any run played after it trips
 
 ## Defects found and fixed
 
@@ -103,7 +110,7 @@ These were found by reading the original `GameScene.js` before rewriting it. The
 
 ```bash
 npm install
-npm test        # vitest run  - 424 tests across 17 files
+npm test        # vitest run  - 491 tests across 22 files
 npm run lint    # eslint .
 ```
 
@@ -134,6 +141,8 @@ Because there is no build step, GitHub Pages serves the repository root unchange
 | `Space` or `1` on the attract screen | Start a one-player game |
 | `2` on the attract screen | Start a two-player game, taking turns |
 | `R` on the attract screen | Cycle the difficulty rank, A to D |
+| `F2` on the attract screen | Service mode: the DIP switch block and the sound test |
+| `C` on the attract screen | Insert a coin, if the operator has taken the machine off free play |
 
 Leave the attract screen alone for half a minute and the machine plays itself, as the cabinet does. Any start button takes the game off it.
 
@@ -180,6 +189,6 @@ Phaser 3, vendored in `lib/`, ships under its own MIT license and its own copyri
 
 A local checkout can substitute the cabinet's own sprites and samples through a gitignored `assets/local/` directory — see [docs/local-art.md](docs/local-art.md) and [docs/local-audio.md](docs/local-audio.md). Nothing put there can reach this repository, the demo, or a pull request, and the title screen labels any run that is using it.
 
-Naming this a replica, a tribute or a clone is not a licence for any of the above, which is why none of it is copied. **What is copied is the design**: the rules, the timings, the formation shapes and the scoring tables, none of which copyright covers. What remains loaded from disk is the starfield, the two projectiles, the explosion and the tractor beam, which are Galaga-derived, used here for a non-commercial tribute, the property of their respective owners, and not covered by this repository's license.
+Naming this a replica, a tribute or a clone is not a licence for any of the above, which is why none of it is copied. **What is copied is the design**: the rules, the timings, the formation shapes and the scoring tables, none of which copyright covers. What remains loaded from disk is the two projectiles, the explosion and the tractor beam, which are Galaga-derived, used here for a non-commercial tribute, the property of their respective owners, and not covered by this repository's license. The starfield is no longer among them: it is generated, as the cabinet's was.
 
 **Trademark.** *Galaga* and *Bandai Namco* are trademarks of Bandai Namco Entertainment Inc. This project is not affiliated with, endorsed by, or sponsored by them. The name is used descriptively, to identify the arcade game this repository reimplements, and the project ships under its own distinct name. No official assets, logos or branding are claimed.

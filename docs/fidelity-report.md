@@ -103,7 +103,7 @@ Primary directly-fetched sources:
 | The captured fighter | Drawn recognisably as the player's own ship | The player's grid in a different palette, so the silhouette is identical by construction and `tests/pixelArt.test.js` asserts it (`SHIP_RECOLOURS`) | matches |
 | Display | 288 x 224 at 60.606 Hz, **vertical** orientation ([PixelatedArcade](https://pixelatedarcade.com/games/galaga/techspecs)) | 672 x 864 portrait (`config.js`) — exactly the cabinet's 7:9 ratio, scaled up for a browser | matches |
 | Stage 255 rollover | Next stage announced as stage zero ([Wikipedia](https://en.wikipedia.org/wiki/Galaga)) | `nextStage` wraps 255 to 0 (`stages.js`). Everything a stage decides for itself wraps with it; difficulty does not, because it is driven from a separate count of stages played | matches |
-| "No-fire" bug | Bugs firing at X=0 leak the 8-entry shot buffer until enemies can never fire again ([Computer Archeology](https://www.computerarcheology.com/Arcade/Galaga/), [Set Side B](https://setsideb.com/the-no-fire-trick-in-galaga/), [Jason Eckert](https://jasoneckert.github.io/myblog/the-galaga-no-fire-cheat-mystery/)) | Not present | **Do not implement.** Noted for completeness only; reproducing it would make the game silently unlosable and it disqualifies scores for world records. |
+| "No-fire" bug | Bugs firing at X=0 leak the 8-entry shot buffer until enemies can never fire again ([Computer Archeology](https://www.computerarcheology.com/Arcade/Galaga/), [Set Side B](https://setsideb.com/the-no-fire-trick-in-galaga/), [Jason Eckert](https://jasoneckert.github.io/myblog/the-galaga-no-fire-cheat-mystery/)) | Reproduced as an operator switch, **off from the factory**: with it on, dodging the last two enemies for fifteen minutes locks all enemy fire until the page is reloaded, and any run finished after the trip shows NO FIRE - SCORE NOT RANKED and never reaches the board (`advanceNoFire` in `attack.js`, `dips.noFireBug`) | matches, gated. The reason it was once excluded -- an unlosable game producing ranked scores -- is handled by the disqualification rather than by pretending the bug never existed. |
 
 **Headline:** every number in the scoring table, the extra-life ladder, the formation
 layout, the challenging-stage cadence, the flag denominations and the bullet limit is
@@ -113,43 +113,42 @@ diving-captor rescue rule, a captive that fights for the other side, the eight
 challenging patterns, the transform bonus cycle, per-rank enemy audio, a stage counter
 that rolls over at 255, and a BEST 5 board that takes three initials.
 
-**What is still not authentic**, and is the honest remainder of this audit:
+**What is still not authentic**, and is the honest remainder of this audit after the
+fifth pass:
 
-- **Twelve of the thirteen caravan rows are authored, not the ROM's.** The *encoding* is
-  the arcade's and so is the shape of the table -- thirteen rows, five flights to a row,
-  two path bytes to a flight, a mirror bit, a launch gate, and a rank-indexed selector with
-  a seventeen-stage period. Row 0 is the cabinet's own stage-1 row byte for byte. The other
-  twelve rows and the index table are written in that encoding rather than read out of the
-  ROM, because the bytes were never published in the material this was reconstructed from.
-  So a player who knows the arcade sees the right *structure* on every stage and the right
-  *entrance* on stage 1. The same applies to the fly-in shapes themselves: six are authored
-  against the ROM's twenty-two.
-- **The difficulty rank is an effect, not a table.** The arcade holds 4 ranks x 26 stages
-  of bombing, capture and attack parameters. This has four ranks that move the player along
-  one smooth curve and flip the two flags that are individually sourced -- stage-1 bombing
-  and the capture gate. It is the right dimension with the wrong resolution, and porting
-  the 26-row table is deliberately not done.
-- **All of the artwork is original, not the arcade's.** Every ship in the game -- the
-  fighter, the fighter a boss takes, the Zako, the Goei, the Boss Galaga in both of its
-  health states, the Scorpion, the Spy Ship and the Flagship -- plus the six stage flags
-  are hand-authored pixel grids in `src/art/pixelArt.js`, drawn to the published
-  descriptions of each ship. They are not traced from the ROM and are not claimed to match
-  it pixel for pixel. The same is true of the flag colours, which could not be sourced --
-  which is why each denomination also carries its own banner motif rather than relying on
-  colour alone. This is a deliberate downgrade in fidelity: the Galaga-derived enemy PNGs
-  that preceded them looked more like the cabinet and had no business in a public
-  repository with a live demo.
-- **`miss.mp3` is placed by inference, not by a source.** It plays when a Challenging
-  Stage ends short of forty, which is the one moment in the game that wants a sound
-  meaning "not quite". No source says that is what the file is for. Every other one of the
-  28 is wired to an event the sources describe. `kill.mp3` survives as the generic burst
-  for things that are not one of the three ranked enemies.
+Every *structural* gap in earlier revisions of this list has been closed. The motion
+model is the arcade's -- every flight path is compiled from a byte program of per-frame
+heading deltas at 60.606 Hz by the interpreter in `src/systems/pathcode.js`, with the
+ROM's two-phase path-block-then-tuck structure; the cubic Bezier chains are gone. There
+are 22 fly-in path blocks, the cabinet's count, and a family of eight dive blocks
+selected by per-stage flight vectors. The difficulty model is the ROM's 4-rank x
+26-stage x 10-parameter table (`src/systems/difficulty.js`), driving per-type launch
+counters, the active-bomber ceiling and its ramp, continuous bombing, the stage-8 reload
+vectors, clone attacks, and the enable flags. Attacks and the transform pull run off
+those counters rather than timers (`src/systems/attack.js`). The starfield is the
+63-star LFSR hardware field with blink, direction control and the dead stop
+(`src/systems/starfield.js`). The operator features exist: lives, bonus schemes,
+coinage, service mode, attract sound, and the no-fire bug behind its switch. What
+remains is exactly two things:
 
-Also deliberately absent: the "no-fire" bug, and only that. See the last row of the table
-for why it stays out. Two-player alternating play, which earlier revisions of this report
-declined on the grounds that it "needs a second set of everything the machine tracks", is
-now implemented -- that turned out to be an argument for building it, since a second set of
-everything the machine tracks is exactly what `src/systems/players.js` is.
+- **Authored byte values where the ROM's bytes were never published.** The caravan rows
+  past row 0, the caravan index table, the 22 path blocks, the dive blocks and flight
+  vectors, the 1,040 difficulty-table cells, the transform divisor, and the starfield
+  taps are all written *in the arcade's encodings and shapes* -- the published
+  reverse-engineering gives the structures, the counts and the addresses, but not the
+  data. Closing that would mean disassembling the ROM, which is a different project with
+  different licensing questions. Nothing authored is claimed to be sourced; everything
+  sourced is cited.
+- **The artwork and audio are original, not the arcade's -- deliberately.** Every ship
+  and flag is a hand-authored pixel grid in `src/art/pixelArt.js`; all 28 sounds are
+  synthesised from `src/audio/soundBank.js`, with the four melodies composed for this
+  game. Bandai Namco's sprites, samples and compositions stay out of a public repository
+  with a live demo, and a local checkout can substitute its own through the gitignored
+  `assets/local/` overrides.
+
+One placement remains inferred rather than sourced: the "miss" sound plays when a
+Challenging Stage ends short of forty, the one moment in the game that wants a sound
+meaning "not quite"; no source says that is what the original file was for.
 
 ---
 
