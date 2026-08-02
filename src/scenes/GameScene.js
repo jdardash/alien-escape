@@ -18,7 +18,6 @@ import {
   DIVE,
   DUAL_FIGHTER_OFFSET_X,
   FORMATION,
-  FORMATION_BOTTOM_Y,
   LIFE_ICONS_SHOWN,
   PLAYER,
   SCREEN,
@@ -64,11 +63,18 @@ import {
   flightTransform,
 } from '../systems/flight.js';
 import {
+  BOMB_ARM_FRAMES,
+  BOMB_DROP_MIN_Y,
+  BOMB_FALL_PER_FRAME,
+  BOMB_SPACING_FRAMES,
   advanceNoFire,
   advanceScheduler,
+  bombAimVx,
   createAttackScheduler,
   createNoFireState,
+  nextBombDrop,
 } from '../systems/attack.js';
+import { FRAME_MS, PATHCODE_FPS } from '../systems/pathcode.js';
 import { DIP_DEFAULTS, bonusSchemeFor, loadDips } from '../systems/dips.js';
 import {
   STARFIELD_SCROLL,
@@ -152,6 +158,12 @@ import {
   showBossDamage,
   createTransformEnemy,
 } from '../entities/enemy.js';
+
+/**
+ * ROM canvas (224 x 288) to this screen: the x3 scale adapter. Bomb gates
+ * and speeds are ROM-denominated in `attack.js` and converted here.
+ */
+const ROM_TO_SCREEN = SCREEN.height / 288;
 
 export class GameScene extends Phaser.Scene {
   constructor() {
@@ -478,7 +490,7 @@ export class GameScene extends Phaser.Scene {
       .setOrigin(0.5, 0)
       .setDepth(20);
 
-    this.bannerText = arcadeText(this, SCREEN.width / 2, SCREEN.height / 2, '', { scale: 2 })
+    this.bannerText = arcadeText(this, SCREEN.width / 2, SCREEN.height / 2, '', { scale: 1.5 })
       .setCenterAlign()
       .setOrigin(0.5)
       .setDepth(30)
@@ -842,9 +854,12 @@ export class GameScene extends Phaser.Scene {
         const start = entryPath(pathVariant, this.slotPosition(slot), SCREEN, mirrored).points[0];
         const enemy = createEnemy(this, this.enemies, slot, start, this.flapFrame);
         // An arriving ship gets at most one shot on the way in, and only from
-        // stage 2: the entry-fire flag is off on the opening row at every rank.
-        enemy.bombsLeft = entryFire && !this.noFire.triggered && Math.random() < 0.25 ? 1 : 0;
-        enemy.bombCooldownMs = 0;
+        // stage 2. Interim: the ROM masks fly-in bombing per creature through
+        // the caravan header byte and the d_2908 capability bits; Task 4's
+        // caravan machine wires those, and until then a one-in-four draw
+        // stands in for the bit distribution.
+        enemy.bombMask = entryFire && !this.noFire.triggered && Math.random() < 0.25 ? 1 : 0;
+        enemy.bombCountdownMs = BOMB_ARM_FRAMES * FRAME_MS;
 
         this.time.delayedCall(groupDelay + step * FORMATION.entryStaggerMs, () => {
           if (!enemy.active) return;
@@ -988,19 +1003,32 @@ export class GameScene extends Phaser.Scene {
 
     if (!this.captureIsIdle()) return;
 
-    const activeBombers = this.enemies.getChildren().filter(isDiving).length;
+    const enemies = this.enemies.getChildren();
+    const activeBombers = enemies.filter(isDiving).length;
     const availableTypes = [
-      ...new Set(this.enemies.getChildren().filter(canBeginDive).map((e) => e.enemyType)),
+      ...new Set(enemies.filter(canBeginDive).map((e) => e.enemyType)),
     ];
+    const escortsAvailable = enemies.filter(
+      (e) => e.enemyType === EnemyType.GOEI && canBeginDive(e),
+    ).length;
 
     const { state, launches, transformPull } = advanceScheduler(this.attack, delta, {
       activeBombers,
+      // The scheduler's live inputs: the reloads and the bomb mask tighten
+      // as the board thins and the stage drags, and continuous bombing arms
+      // once the count drops below the row's threshold with the player able
+      // to fire -- all recomputed every frame, the ROM's f_0857.
+      aliveEnemies: this.enemies.countActive(true),
+      playerFireActive: this.player.active,
       availableTypes,
+      escortsAvailable,
+      // The cflag: a held fighter keeps the boss alternation from advancing.
+      captureActive: this.captureState === CaptureState.HELD,
       transformStage: Boolean(this.transformType),
     });
     this.attack = state;
 
-    launches.forEach((type) => this.launchDive(type));
+    launches.forEach((launch) => this.launchDive(launch));
     if (transformPull) this.triggerTransform();
   }
 
@@ -1077,8 +1105,10 @@ export class GameScene extends Phaser.Scene {
         set,
         this.flapFrame,
       );
-      enemy.bombsLeft = this.enemiesArmed() ? this.difficulty.continuousBombs : 0;
-      enemy.bombCooldownMs = 0;
+      // Armed like any attack dive: the mask the scheduler computed this
+      // frame from d_0909 and the live board.
+      enemy.bombMask = this.enemiesArmed() ? this.attack.bombFlags : 0;
+      enemy.bombCountdownMs = BOMB_ARM_FRAMES * FRAME_MS;
       enemy.flight = createFlight(
         divePath(start, this.player.x, SCREEN, { stageIndex: this.round }),
         TRANSFORM.runDurationMs,
@@ -1102,44 +1132,36 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * Launch one attacker of the type whose counter just expired.
+   * Launch the one attacker the scheduler emitted this frame.
    *
-   * The pick within the type is random; the *type* is the scheduler's, which
-   * is the arcade's split of the decision.
+   * The squad structure now lives in the scheduler: a boss escort sortie
+   * arrives as an `escortLeader` launch followed by its `escortWingman`
+   * launches on the next frames, the pool's one-per-frame stagger, so this
+   * launches exactly one enemy. The pick within the type is random; the
+   * arcade scans the formation in object-index order, which Task 5's slot
+   * work can refine.
    */
-  launchDive(type) {
+  launchDive(launch) {
     if (this.isGameOver || this.challenging || !this.captureIsIdle()) return;
 
     const eligible = this.enemies.getChildren().filter(canBeginDive);
-    const ofType = eligible.filter((enemy) => enemy.enemyType === type);
+    const ofType = eligible.filter((enemy) => enemy.enemyType === launch.type);
     if (ofType.length === 0) return;
 
     // A boss holding a captured fighter has to actually leave formation for
     // the rescue to be possible at all, so it is weighted to lead the dive
     // rather than waiting for a one-in-four draw.
     const captorLeads =
-      type === EnemyType.BOSS &&
+      launch.type === EnemyType.BOSS &&
       this.captor?.captiveAttached === true &&
       canBeginDive(this.captor) &&
       Math.random() < CAPTURE.captorDiveChance;
 
     const leader = captorLeads ? this.captor : Phaser.Utils.Array.GetRandom(ofType);
-    const attackers = [leader];
-
-    // A Boss Galaga clones Goei wingmen onto its run -- the clone-attack
-    // count is a difficulty-table parameter -- which is what makes it worth
-    // up to 1600 rather than 400.
-    if (leader.enemyType === EnemyType.BOSS && this.difficulty.cloneAttackCount > 0) {
-      const escorts = eligible
-        .filter((enemy) => enemy !== leader && enemy.enemyType === EnemyType.GOEI)
-        .slice(0, this.difficulty.cloneAttackCount);
-      attackers.push(...escorts);
-    }
-
-    leader.escortCount = attackers.length - 1;
-    attackers.forEach((enemy, index) => {
-      this.time.delayedCall(index * 140, () => this.beginDive(enemy));
-    });
+    // Scoring reads the sortie's size off the leader: a boss that brought
+    // two wingmen is the 1600-point kill.
+    leader.escortCount = launch.wingmen ?? 0;
+    this.beginDive(leader);
   }
 
   beginDive(enemy) {
@@ -1151,13 +1173,13 @@ export class GameScene extends Phaser.Scene {
     // fights: rearm it for this run. See `updateCaptive` for the release.
     if (enemy.captiveAttached && this.captive) this.captive.hasBombed = false;
 
-    // The continuous-bomb allowance is a difficulty-table parameter: how many
-    // bombs one attacker may string together on a run, released from the aim
-    // band rather than at a fixed point. Stage 1 is unarmed in the arcade --
-    // the opening row's bomb-drop flags are zero at the factory rank -- so
-    // the only way to lose a ship on the first screen is to be flown into.
-    enemy.bombsLeft = this.enemiesArmed() ? this.difficulty.continuousBombs : 0;
-    enemy.bombCooldownMs = 0;
+    // Armed at launch, as `j_108A` arms every diver: a 30-frame countdown
+    // and the drop bitmask the scheduler computed this frame from d_0909 --
+    // the live board decides how many bombs this run carries, not a
+    // per-stage allowance. Each set bit is one bomb, released low in the
+    // field on the 20-frame spacing.
+    enemy.bombMask = this.enemiesArmed() ? this.attack.bombFlags : 0;
+    enemy.bombCountdownMs = BOMB_ARM_FRAMES * FRAME_MS;
     // Which block the dive flies and how hot comes from the per-stage flight
     // vectors, the arcade's own per-type selection.
     enemy.flight = createFlight(
@@ -1965,11 +1987,13 @@ export class GameScene extends Phaser.Scene {
     // enemy is or what it hits changes -- just what the rotation looks like.
     enemy.setRotation(quantizeHeading(angle));
 
-    // Bombs release from the aim band: when the attacker is above the player
-    // and roughly in their column, up to its continuous-bomb allowance, with
-    // a reload between shots. That is the arcade's model -- a diver that
-    // crosses the player's column twice shoots twice -- and it is why moving
-    // under a dive is a decision rather than a free dodge.
+    // The ROM's bomb release, not an aim band: the countdown armed at launch
+    // expires every 20 frames and shifts the drop bitmask one bit; a
+    // shifted-out set bit is a bomb, released only once the bomber is low in
+    // the field and the player can be shot at. A set bit is held while the
+    // bomber is still high -- the corpus's compensation for a replica
+    // descent slower than the Z80's. Dodging works because each bomb's aim
+    // is frozen at its drop (see `fireEnemyBullet`).
     //
     // A transform bonus ship flies `PASSING` because it never joins a
     // formation, but it is making an attack run, not a fly-past: the trio is
@@ -1980,16 +2004,14 @@ export class GameScene extends Phaser.Scene {
       enemy.mode === EnemyMode.DIVING ||
       enemy.mode === EnemyMode.ENTERING ||
       enemy.transformSet !== undefined;
-    if (bombing && enemy.bombsLeft > 0) {
-      enemy.bombCooldownMs = Math.max((enemy.bombCooldownMs ?? 0) - delta, 0);
-      const inBand =
-        Math.abs(enemy.x - this.player.x) < DIVE.bombAimWindowPx &&
-        enemy.y > FORMATION_BOTTOM_Y - 40 &&
-        enemy.y < PLAYER.y - 140;
-      if (inBand && enemy.bombCooldownMs === 0 && this.player.active) {
-        enemy.bombsLeft -= 1;
-        enemy.bombCooldownMs = DIVE.bombReloadMs;
-        this.fireEnemyBullet(enemy);
+    if (bombing && enemy.bombMask > 0) {
+      enemy.bombCountdownMs = (enemy.bombCountdownMs ?? BOMB_ARM_FRAMES * FRAME_MS) - delta;
+      if (enemy.bombCountdownMs <= 0) {
+        enemy.bombCountdownMs = BOMB_SPACING_FRAMES * FRAME_MS;
+        const isLow = enemy.y >= BOMB_DROP_MIN_Y * ROM_TO_SCREEN && this.player.active;
+        const { mask, drop } = nextBombDrop(enemy.bombMask, isLow);
+        enemy.bombMask = mask;
+        if (drop) this.fireEnemyBullet(enemy);
       }
     }
 
@@ -2063,8 +2085,16 @@ export class GameScene extends Phaser.Scene {
     bullet.body.setAllowGravity(false);
 
     this.sfx.enemyFire.play({ volume: 0.2 });
-    const angle = Math.atan2(this.player.y - enemy.y, this.player.x - enemy.x);
-    bullet.setVelocity(Math.cos(angle) * DIVE.bombSpeed, Math.sin(angle) * DIVE.bombSpeed);
+    // The ROM's frozen aimed shot: the bomb falls at the cabinet's fixed
+    // rate and its sideways slope is `clamp(+-3, 5 dx/dy)` toward where the
+    // player IS at the drop, never updated after -- aimed where you were,
+    // which is why moving under a dive is a decision and standing still is
+    // not. The slope ratio is scale-invariant; the clamp and fall rate are
+    // ROM px/frame, converted through the x3 adapter and the frame rate.
+    const vx =
+      bombAimVx(this.player.x - bullet.x, this.player.y - bullet.y) * ROM_TO_SCREEN * PATHCODE_FPS;
+    const vy = BOMB_FALL_PER_FRAME * ROM_TO_SCREEN * PATHCODE_FPS;
+    bullet.setVelocity(vx, vy);
   }
 
   updatePlayer() {

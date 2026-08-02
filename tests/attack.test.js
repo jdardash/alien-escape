@@ -2,24 +2,37 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ATTACK_TYPES,
+  BOMB_ARM_FRAMES,
+  BOMB_DROP_MIN_Y,
+  BOMB_SPACING_FRAMES,
+  LAUNCH_POOL_SLOTS,
+  TICK_FRAMES,
   TRANSFORM_EVERY_NTH_ZAKO,
   advanceScheduler,
+  bombAimVx,
   createAttackScheduler,
-  maxActiveBombers,
+  nextBombDrop,
 } from '../src/systems/attack.js';
 import { difficultyRow } from '../src/systems/difficulty.js';
 import { DifficultyRank } from '../src/systems/caravans.js';
+import { FRAME_MS } from '../src/systems/pathcode.js';
 
-/** A stage-5 factory row: three distinct counters, no reload vectors yet. */
-const row = difficultyRow(5, DifficultyRank.A);
+/** Stage 1 at the factory rank: parms [0,0,0,0,2,2,12,6,0,0,0]. */
+const row = difficultyRow(1, DifficultyRank.A);
 
-/** Run the scheduler forward in fixed steps, collecting everything it emits. */
-function run(state, totalMs, options = {}, stepMs = 50) {
+/** A live full board, the context most tests want. */
+const board = { aliveEnemies: 40, escortsAvailable: 2 };
+
+/**
+ * Run the scheduler one hardware frame per advance, the way the scene does,
+ * collecting everything it emits.
+ */
+function run(state, frames, context = {}) {
+  let current = state;
   const launches = [];
   let pulls = 0;
-  let current = state;
-  for (let elapsed = 0; elapsed < totalMs; elapsed += stepMs) {
-    const result = advanceScheduler(current, stepMs, options);
+  for (let i = 0; i < frames; i += 1) {
+    const result = advanceScheduler(current, FRAME_MS, { ...board, ...context });
     current = result.state;
     launches.push(...result.launches);
     if (result.transformPull) pulls += 1;
@@ -27,109 +40,230 @@ function run(state, totalMs, options = {}, stepMs = 50) {
   return { state: current, launches, pulls };
 }
 
-describe('launch counters', () => {
-  it('launches nothing before the first counter expires', () => {
-    const { launches } = run(createAttackScheduler(row), row.launchMs.zako - 200);
-    expect(launches).toEqual([]);
-  });
-
-  it('launches each type on its own cadence', () => {
-    const { launches } = run(createAttackScheduler(row), row.launchMs.boss + 400);
-
-    // The Zako counter is the shortest and the boss counter the longest, so
-    // by the time the boss has launched once the Zako has gone more often.
-    expect(launches.filter((type) => type === 'zako').length).toBeGreaterThan(
-      launches.filter((type) => type === 'boss').length,
-    );
-    expect(launches).toContain('boss');
-  });
-
-  it('reloads a counter after it fires rather than firing every frame', () => {
-    const horizon = row.launchMs.zako * 3 + 400;
-    const { launches } = run(createAttackScheduler(row), horizon);
-    const zako = launches.filter((type) => type === 'zako');
-    expect(zako.length).toBe(3);
-  });
-
-  it('holds an expired counter while its type has no one left to send', () => {
+describe('the initial timers (new_stage.s:100-103)', () => {
+  it('starts every stage at boss 0x16, red 2, yellow 2 ticks', () => {
     const state = createAttackScheduler(row);
-    const starved = run(state, row.launchMs.zako + 400, { availableTypes: ['boss', 'goei'] });
-    expect(starved.launches).not.toContain('zako');
+    expect(state.timers).toEqual({ boss: 0x16, goei: 2, zako: 2 });
+  });
 
-    // The moment the type is available again it launches without re-counting.
-    const freed = advanceScheduler(starved.state, 50, { availableTypes: ['zako'] });
-    expect(freed.launches).toContain('zako');
+  it('launches nothing before the first tick can expire a timer', () => {
+    expect(run(createAttackScheduler(row), 31).launches).toEqual([]);
+  });
+
+  it('sends the red first, the yellow right behind, the boss much later', () => {
+    const { launches } = run(createAttackScheduler(row), 48);
+    expect(launches.map((launch) => launch.type)).toEqual(['goei', 'zako']);
   });
 });
 
-describe('the active-bomber ceiling', () => {
-  it('never launches past the row ceiling', () => {
-    const state = createAttackScheduler(row);
-    const { launches } = run(state, row.launchMs.zako + 400, {
-      activeBombers: row.maxActiveBombers,
+describe('the djnz walk (gg1-2_fx.s:927-953)', () => {
+  it('stops decrementing behind the timer it handled', () => {
+    // Tick 1 decrements all three; tick 2 expires the red, so the yellow
+    // keeps its 1 -- the single-handling that keeps types fair.
+    const { state } = run(createAttackScheduler(row), 2 * TICK_FRAMES);
+    expect(state.timers.zako).toBe(1);
+    // The red reloaded from this frame's f_0857 value: d_08CD row 0 col 0.
+    expect(state.timers.goei).toBe(9);
+  });
+
+  it('handles at most one type per tick', () => {
+    const state = { ...createAttackScheduler(row), timers: { boss: 5, goei: 1, zako: 1 } };
+    const { launches, state: after } = run(state, TICK_FRAMES);
+    expect(launches).toEqual([{ type: 'goei', role: 'attack' }]);
+    // The yellow's expiry waits for the next tick untouched.
+    expect(after.timers.zako).toBe(1);
+    expect(after.timers.boss).toBe(4);
+  });
+
+  it('burns a full reload on an expiry with no candidate', () => {
+    const { launches, state } = run(createAttackScheduler(row), 2 * TICK_FRAMES, {
+      availableTypes: ['boss'],
     });
     expect(launches).toEqual([]);
-  });
-
-  it('launches the held attacker as soon as the air clears', () => {
-    const state = createAttackScheduler(row);
-    const blocked = run(state, row.launchMs.zako + 400, {
-      activeBombers: row.maxActiveBombers,
-    });
-    const freed = advanceScheduler(blocked.state, 50, { activeBombers: 0 });
-    expect(freed.launches.length).toBeGreaterThan(0);
-  });
-
-  it('raises the ceiling by one after the bomber ramp elapses', () => {
-    const state = createAttackScheduler(row);
-    expect(maxActiveBombers(state)).toBe(row.maxActiveBombers);
-
-    const later = run(state, row.bomberRampMs + 100).state;
-    expect(maxActiveBombers(later)).toBe(row.maxActiveBombers + 1);
-  });
-
-  it('counts the launches it just made against the same frame ceiling', () => {
-    // All three counters expired while the air was full; when it clears, only
-    // as many launch as the ceiling allows in one sweep.
-    const state = createAttackScheduler(row);
-    const blocked = run(state, row.launchMs.boss + 400, {
-      activeBombers: 8,
-    });
-    const freed = advanceScheduler(blocked.state, 50, { activeBombers: 0 });
-    expect(freed.launches.length).toBeLessThanOrEqual(maxActiveBombers(blocked.state));
+    // Reload happened BEFORE dispatch found nobody: not held at zero.
+    expect(state.timers.goei).toBe(9);
   });
 });
 
-describe('the transform pull', () => {
-  it('replaces every Nth Zako launch on a transform stage', () => {
-    const horizon = row.launchMs.zako * (TRANSFORM_EVERY_NTH_ZAKO + 2);
-    const withTransforms = run(createAttackScheduler(row), horizon, { transformStage: true });
+describe('the cap gate (gg1-2_fx.s:935-945)', () => {
+  it('sets the expired timer back to one and freezes the rest', () => {
+    const full = { activeBombers: row.maxBombers };
+    const { launches, state } = run(createAttackScheduler(row), 2 * TICK_FRAMES, full);
+    expect(launches).toEqual([]);
+    expect(state.timers.goei).toBe(1);
+    expect(state.timers.zako).toBe(1);
 
-    // The pull replaces a launch rather than riding alongside one: however
-    // many times the counter fired, every Nth firing became a pull and the
-    // rest became launches.
-    const zako = withTransforms.launches.filter((type) => type === 'zako').length;
-    const fires = zako + withTransforms.pulls;
+    // Re-checked every tick while the air stays full.
+    const later = run(state, TICK_FRAMES, full);
+    expect(later.launches).toEqual([]);
+    expect(later.state.timers.goei).toBe(1);
+
+    // The moment it clears, the held type launches.
+    const freed = run(later.state, TICK_FRAMES, { activeBombers: 0 });
+    expect(freed.launches).toEqual([{ type: 'goei', role: 'attack' }]);
+  });
+});
+
+describe('the launch pool (gg1-2_fx.s:872-921)', () => {
+  it('queues a boss escort sortie and drains one launch per frame', () => {
+    // The boss timer runs 22 ticks; on that tick the sortie is queued, and
+    // the pool emits leader then wingmen on the following frames.
+    const queued = run(createAttackScheduler(row), 22 * TICK_FRAMES);
+    expect(queued.state.pool.filter(Boolean)).toHaveLength(3);
+
+    const drained = run(queued.state, 3);
+    expect(drained.launches).toEqual([
+      { type: 'boss', role: 'escortLeader', wingmen: 2 },
+      { type: 'goei', role: 'escortWingman' },
+      { type: 'goei', role: 'escortWingman' },
+    ]);
+    expect(drained.state.pool).toEqual(new Array(LAUNCH_POOL_SLOTS).fill(null));
+  });
+
+  it('bypasses both the tick gate and the cap while draining', () => {
+    const queued = run(createAttackScheduler(row), 22 * TICK_FRAMES);
+    // Frames 353-355 are not tick frames, and the air is over-full: the
+    // squad still peels off, one per frame.
+    const drained = run(queued.state, 3, { activeBombers: 10 });
+    expect(drained.launches).toHaveLength(3);
+  });
+
+  it('takes only the escorts the formation can offer', () => {
+    const queued = run(createAttackScheduler(row), 22 * TICK_FRAMES, { escortsAvailable: 1 });
+    const drained = run(queued.state, 2);
+    expect(drained.launches).toEqual([
+      { type: 'boss', role: 'escortLeader', wingmen: 1 },
+      { type: 'goei', role: 'escortWingman' },
+    ]);
+  });
+});
+
+describe('the boss mission alternation (gg1-2_fx.s:1013-1043)', () => {
+  /** A scheduler one tick from a boss dispatch. */
+  function bossReady(overrides = {}) {
+    return { ...createAttackScheduler(row), timers: { boss: 1, goei: 9, zako: 9 }, ...overrides };
+  }
+
+  it('sends the first boss as an escort sortie and the second to capture', () => {
+    const first = run(bossReady(), TICK_FRAMES + 1);
+    expect(first.state.bossToggle).toBe(1);
+    expect(first.launches[0]).toEqual({ type: 'boss', role: 'escortLeader', wingmen: 2 });
+
+    const second = run(bossReady({ bossToggle: 1 }), TICK_FRAMES + 1);
+    expect(second.state.bossToggle).toBe(2);
+    expect(second.launches).toEqual([{ type: 'boss', role: 'capture', wingmen: 0 }]);
+  });
+
+  it('holds the toggle while a capture is in progress', () => {
+    // The cflag: one capture at a time, so a boss launched mid-capture flies
+    // an escort sortie and the alternation waits.
+    const held = run(bossReady({ bossToggle: 1 }), TICK_FRAMES + 1, { captureActive: true });
+    expect(held.state.bossToggle).toBe(1);
+    expect(held.launches[0].role).toBe('escortLeader');
+  });
+});
+
+describe('continuous bombing (f_0857 / gg1-5.s:480-489)', () => {
+  it('arms when the board thins below the threshold with fire active', () => {
+    const result = advanceScheduler(createAttackScheduler(row), FRAME_MS, {
+      aliveEnemies: 3,
+      playerFireActive: true,
+    });
+    expect(result.continuousBombing).toBe(true);
+    expect(result.state.reloads).toEqual({ boss: 2, goei: 2, zako: 2 });
+  });
+
+  it('never arms without the player-fire task', () => {
+    const result = advanceScheduler(createAttackScheduler(row), FRAME_MS, {
+      aliveEnemies: 3,
+      playerFireActive: false,
+    });
+    expect(result.continuousBombing).toBe(false);
+  });
+
+  it('disarms the moment the board refills', () => {
+    const thinned = run(createAttackScheduler(row), 1, { aliveEnemies: 3 });
+    const refilled = run(thinned.state, 1, { aliveEnemies: 40 });
+    expect(refilled.state.continuousBombing).toBe(false);
+    expect(refilled.state.reloads.goei).toBe(9);
+  });
+});
+
+describe('the dispatch guard (gg1-2_fx.s:858-869)', () => {
+  it('holds the timers and the pool while the fire task is down', () => {
+    const { launches, state } = run(createAttackScheduler(row), 4 * TICK_FRAMES, {
+      playerFireActive: false,
+    });
+    expect(launches).toEqual([]);
+    expect(state.timers).toEqual({ boss: 0x16, goei: 2, zako: 2 });
+  });
+});
+
+describe('the bomb mask exposure', () => {
+  it('recomputes the d_0909 mask from the live board every frame', () => {
+    const full = advanceScheduler(createAttackScheduler(row), FRAME_MS, { aliveEnemies: 40 });
+    expect(full.bombFlags).toBe(0x03);
+
+    const thinner = advanceScheduler(createAttackScheduler(row), FRAME_MS, { aliveEnemies: 35 });
+    expect(thinner.bombFlags).toBe(0x01);
+  });
+});
+
+describe('the interim transform pull', () => {
+  it('turns every Nth yellow dispatch into the pull on a transform stage', () => {
+    const { launches, pulls } = run(createAttackScheduler(row), 2000, {
+      availableTypes: ['zako'],
+      transformStage: true,
+    });
+    const zako = launches.filter((launch) => launch.type === 'zako').length;
+    const fires = zako + pulls;
     expect(fires).toBeGreaterThanOrEqual(TRANSFORM_EVERY_NTH_ZAKO);
-    expect(withTransforms.pulls).toBe(Math.floor(fires / TRANSFORM_EVERY_NTH_ZAKO));
+    expect(pulls).toBe(Math.floor(fires / TRANSFORM_EVERY_NTH_ZAKO));
   });
 
   it('never pulls on a stage with no transform type', () => {
-    const horizon = row.launchMs.zako * (TRANSFORM_EVERY_NTH_ZAKO + 2);
-    const plain = run(createAttackScheduler(row), horizon, { transformStage: false });
+    const plain = run(createAttackScheduler(row), 2000, {
+      availableTypes: ['zako'],
+      transformStage: false,
+    });
     expect(plain.pulls).toBe(0);
   });
 });
 
+describe('the bombing model (j_108A / case_0DF5)', () => {
+  it('keeps the ROM arming constants', () => {
+    expect(BOMB_ARM_FRAMES).toBe(0x1e);
+    expect(BOMB_SPACING_FRAMES).toBe(0x14);
+    expect(BOMB_DROP_MIN_Y).toBe(120);
+  });
+
+  it('freezes the aim as clamp(+-3, 5 dx/dy)', () => {
+    expect(bombAimVx(100, 100)).toBe(3);
+    expect(bombAimVx(-500, 100)).toBe(-3);
+    expect(bombAimVx(10, 100)).toBeCloseTo(0.5, 9);
+    expect(bombAimVx(10, 0)).toBe(0);
+    expect(bombAimVx(10, -50)).toBe(0);
+  });
+
+  it('shifts the mask per expiry and holds a set bit until low', () => {
+    expect(nextBombDrop(0, true)).toEqual({ mask: 0, drop: false });
+    expect(nextBombDrop(0b10, true)).toEqual({ mask: 0b01, drop: false });
+    expect(nextBombDrop(0b11, false)).toEqual({ mask: 0b11, drop: false });
+    expect(nextBombDrop(0b11, true)).toEqual({ mask: 0b01, drop: true });
+    expect(nextBombDrop(0b01, true)).toEqual({ mask: 0b00, drop: true });
+  });
+});
+
 describe('shape', () => {
-  it('exposes the three attack types in launch order', () => {
+  it('walks the three types in the djnz order', () => {
     expect(ATTACK_TYPES).toEqual(['boss', 'goei', 'zako']);
+    expect(TICK_FRAMES).toBe(16);
   });
 
   it('does not mutate the state it is given', () => {
     const state = createAttackScheduler(row);
     const before = JSON.stringify(state);
-    advanceScheduler(state, 1000);
+    advanceScheduler(state, 1000, board);
     expect(JSON.stringify(state)).toBe(before);
   });
 });

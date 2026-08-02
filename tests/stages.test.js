@@ -14,13 +14,11 @@ import {
   COMBAT_STAGE_ROWS,
   enemiesBomb,
   captureAllowed,
-  CAPTURE_MIN_ENEMIES,
   challengingRoster,
   nextStage,
   STAGE_ROLLOVER,
   DifficultyRank,
   RANK_COUNT,
-  captureMinEnemies,
 } from '../src/systems/stages.js';
 import { EnemyType } from '../src/systems/formation.js';
 
@@ -39,22 +37,16 @@ describe('challenging stage cadence', () => {
   });
 });
 
-describe('difficulty ramp', () => {
-  it('shortens the gap between dives as stages advance', () => {
-    expect(stageDifficulty(8).diveIntervalMs).toBeLessThan(stageDifficulty(1).diveIntervalMs);
+describe('difficulty knobs', () => {
+  it('passes the ROM parameters through whole for the scheduler', () => {
+    const knobs = stageDifficulty(1);
+    expect(knobs.parms).toEqual([0, 0, 0, 0, 2, 2, 0xc, 6, 0, 0, 0]);
+    expect(knobs.maxBombers).toBe(2);
+    expect(knobs.beamFramesPerStrip).toBe(0xc);
   });
 
-  it('never lets the dive interval reach zero', () => {
-    for (let stage = 1; stage <= 200; stage += 1) {
-      expect(stageDifficulty(stage).diveIntervalMs).toBeGreaterThanOrEqual(600);
-    }
-  });
-
-  it('caps every knob so late stages stay playable', () => {
-    const late = stageDifficulty(999);
-    expect(late.maxSimultaneousDivers).toBeLessThanOrEqual(6);
-    expect(late.diveSpeed).toBeLessThanOrEqual(1.7);
-    expect(late.escortChance).toBeLessThanOrEqual(0.75);
+  it('lets more attackers fly at once as the stages climb', () => {
+    expect(stageDifficulty(26).maxBombers).toBeGreaterThan(stageDifficulty(1).maxBombers);
   });
 
   // Regression. An enemy sitting in the grid never shoots in the arcade; only
@@ -66,22 +58,13 @@ describe('difficulty ramp', () => {
     }
   });
 
-  it('replays the last table row rather than ramping forever', () => {
-    // The table holds 26 stage rows; everything past them plays row 26.
-    expect(stageDifficulty(26)).toEqual(stageDifficulty(50));
-    expect(stageDifficulty(26)).toEqual(stageDifficulty(255));
-  });
-
-  it('never regresses in difficulty as the stage rises', () => {
-    for (let stage = 2; stage <= 40; stage += 1) {
-      const previous = stageDifficulty(stage - 1);
-      const current = stageDifficulty(stage);
-      expect(current.diveIntervalMs).toBeLessThanOrEqual(previous.diveIntervalMs);
-      expect(current.maxSimultaneousDivers).toBeGreaterThanOrEqual(
-        previous.maxSimultaneousDivers,
-      );
-      expect(current.diveSpeed).toBeGreaterThanOrEqual(previous.diveSpeed);
-    }
+  it('cycles the last four rows past stage 26, not just the last one', () => {
+    // The ROM's stage adjust subtracts fours: stage 50 lands back on 26, but
+    // stage 28 plays stage 24's row and stage 31 plays the challenge row 23.
+    expect(stageDifficulty(50)).toEqual(stageDifficulty(26));
+    expect(stageDifficulty(28)).toEqual(stageDifficulty(24));
+    expect(stageDifficulty(31)).toEqual(stageDifficulty(23));
+    expect(stageDifficulty(28)).not.toEqual(stageDifficulty(26));
   });
 });
 
@@ -214,11 +197,12 @@ describe('the arcade entrance-row cycle', () => {
 });
 
 describe('enemy bombing', () => {
-  it('holds fire completely through the opening stage', () => {
-    expect(enemiesBomb(1)).toBe(false);
-  });
-
-  it('opens up from stage 2', () => {
+  // Overturned in pass 6: the ROM has no bombs-enable flag. The d_0909 mask
+  // is computed every frame and no reachable cell of it is zero, so even
+  // stage 1's dives carry a bomb or two; what stage 1 genuinely lacks is
+  // fly-in bombing, which is `enemiesFireDuringEntry`'s rule.
+  it('arms the dives from stage 1 onward', () => {
+    expect(enemiesBomb(1)).toBe(true);
     expect(enemiesBomb(2)).toBe(true);
     expect(enemiesBomb(4)).toBe(true);
   });
@@ -235,11 +219,10 @@ describe('enemy bombing', () => {
 });
 
 describe('capture gating', () => {
-  it('never deploys a beam during the opening stage', () => {
-    expect(captureAllowed(1, 40)).toBe(false);
-  });
-
-  it('allows a beam from stage 2 with a full formation', () => {
+  // Overturned in pass 6: the ROM never stage-gates captures. Every other
+  // boss launch is a solo capture dive from stage 1 (gg1-2_fx.s:1013-1043).
+  it('allows a beam from stage 1', () => {
+    expect(captureAllowed(1, 40)).toBe(true);
     expect(captureAllowed(2, 40)).toBe(true);
   });
 
@@ -247,10 +230,9 @@ describe('capture gating', () => {
     expect(captureAllowed(7, 40)).toBe(false);
   });
 
-  it('stops trying once the formation is nearly cleared', () => {
-    expect(captureAllowed(5, CAPTURE_MIN_ENEMIES)).toBe(false);
-    expect(captureAllowed(5, 2)).toBe(false);
-    expect(captureAllowed(5, CAPTURE_MIN_ENEMIES + 1)).toBe(true);
+  it('needs at least one enemy left to be the captor', () => {
+    expect(captureAllowed(5, 0)).toBe(false);
+    expect(captureAllowed(5, 1)).toBe(true);
   });
 });
 
@@ -405,11 +387,11 @@ describe('the stage counter rolling over', () => {
 /**
  * The operator's difficulty rank.
  *
- * The ROM holds a 4-rank by 26-stage table of bombing, capture and attack
- * parameters, selected by a DIP switch, and since pass 5 so does this build:
- * `difficulty.js` holds the table and `stageDifficulty` reads it. What these
- * pin is that the rank is real, that it is monotonic, and that rank A is the
- * factory machine.
+ * The ROM's 4 x 26 x 5 packed table is selected by the DIP rank through the
+ * rotation LUT (raw value 3 = the factory letter A = the easiest sub-table).
+ * `difficultyData.js` carries the bytes and `difficulty.js` the plumbing;
+ * what these pin is that the rank reaches `stageDifficulty` and that the
+ * letters land on the right sub-tables.
  */
 describe('the difficulty rank', () => {
   it('defaults to the factory rank when nobody asks for one', () => {
@@ -418,29 +400,16 @@ describe('the difficulty rank', () => {
     expect(captureAllowed(4, 20)).toBe(captureAllowed(4, 20, DifficultyRank.A));
   });
 
-  it('makes the same stage harder at every step up the ranks', () => {
-    const ranks = [DifficultyRank.A, DifficultyRank.B, DifficultyRank.C, DifficultyRank.D];
-    const curves = ranks.map((rank) => stageDifficulty(4, rank));
-
-    for (let i = 1; i < curves.length; i += 1) {
-      expect(curves[i].diveIntervalMs).toBeLessThanOrEqual(curves[i - 1].diveIntervalMs);
-      expect(curves[i].maxSimultaneousDivers).toBeGreaterThanOrEqual(
-        curves[i - 1].maxSimultaneousDivers,
-      );
-      expect(curves[i].diveSpeed).toBeGreaterThan(curves[i - 1].diveSpeed);
-      expect(curves[i].bombChance).toBeGreaterThan(curves[i - 1].bombChance);
-    }
-  });
-
-  it('keeps every rank playable however far the run goes', () => {
-    for (let rank = 0; rank < RANK_COUNT; rank += 1) {
-      for (const stage of [1, 20, 200, 255]) {
-        const curve = stageDifficulty(stage, rank);
-        expect(curve.diveIntervalMs).toBeGreaterThan(600);
-        expect(curve.bombChance).toBeLessThanOrEqual(0.95);
-        expect(curve.maxSimultaneousDivers).toBeLessThanOrEqual(9);
-      }
-    }
+  it('gives each letter its own sub-table through the machine rotation', () => {
+    // Stage 1's third packed byte differs per sub-table: A plays 0x22,
+    // B 0x12, C and D 0x23 -- so the max-bombers nibble tells them apart.
+    expect(stageDifficulty(1, DifficultyRank.A).maxBombers).toBe(2);
+    expect(stageDifficulty(1, DifficultyRank.B).maxBombers).toBe(1);
+    // The two hard ranks split later: stage 24 is 89 at C, 89 at D on
+    // different rows -- pin the whole parameter set instead.
+    expect(stageDifficulty(26, DifficultyRank.D).parms).toEqual([
+      7, 2, 9, 9, 6, 8, 3, 0xe, 1, 1, 0x0a,
+    ]);
   });
 
   it('treats a corrupt rank as the factory one rather than crashing', () => {
@@ -448,14 +417,12 @@ describe('the difficulty rank', () => {
     expect(stageDifficulty(5, 99)).toEqual(stageDifficulty(5, DifficultyRank.D));
   });
 
-  // Sourced: at rank A the opening round's bomb-drop enable flags are zero, so
-  // stage 1 cannot shoot at all. That is a property of the factory setting, and
-  // the two hard ranks are where an operator takes it away.
-  it('disarms stage 1 on a factory machine and arms it on a hard one', () => {
-    expect(enemiesBomb(1, DifficultyRank.A)).toBe(false);
-    expect(enemiesBomb(1, DifficultyRank.B)).toBe(false);
-    expect(enemiesBomb(1, DifficultyRank.C)).toBe(true);
-    expect(enemiesBomb(1, DifficultyRank.D)).toBe(true);
+  it('arms the dives on stage 1 at every rank', () => {
+    // Overturned in pass 6: the invented flags column disarmed the easy
+    // ranks' opening round; the ROM arms every rank's dives through d_0909.
+    for (let rank = 0; rank < RANK_COUNT; rank += 1) {
+      expect(enemiesBomb(1, rank)).toBe(true);
+    }
   });
 
   it('never lets anything bomb during a challenging stage, at any rank', () => {
@@ -471,18 +438,9 @@ describe('the difficulty rank', () => {
     expect(enemiesFireDuringEntry(2)).toBe(true);
   });
 
-  it('keeps setting traps deeper into a thinning formation as the rank rises', () => {
-    const thresholds = [0, 1, 2, 3].map(captureMinEnemies);
-    for (let i = 1; i < thresholds.length; i += 1) {
-      expect(thresholds[i]).toBeLessThanOrEqual(thresholds[i - 1]);
-    }
-    // Never so deep that the captor cannot be hunted down.
-    expect(Math.min(...thresholds)).toBeGreaterThanOrEqual(2);
-  });
-
-  it('still refuses a capture before stage 2 or during a bonus round, at any rank', () => {
+  it('allows a capture from stage 1 at every rank, but never in a bonus round', () => {
     for (let rank = 0; rank < RANK_COUNT; rank += 1) {
-      expect(captureAllowed(1, 40, rank)).toBe(false);
+      expect(captureAllowed(1, 40, rank)).toBe(true);
       expect(captureAllowed(3, 40, rank)).toBe(false);
     }
   });

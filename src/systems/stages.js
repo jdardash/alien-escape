@@ -25,7 +25,6 @@ import {
   DIFFICULTY_STAGE_ROWS,
   difficultyRow,
   difficultyRowIndex,
-  usesReloadVectors,
 } from './difficulty.js';
 
 export {
@@ -41,7 +40,6 @@ export {
   combatStageIndex,
   difficultyRow,
   normalizeRank,
-  usesReloadVectors,
 };
 
 /** Stage 3, then 7, 11, 15, and so on. */
@@ -77,75 +75,53 @@ export function nextStage(stage) {
 /**
  * Whether arriving enemies bomb while still flying into formation.
  *
- * The arcade holds fire through the whole of round 1's assembly and opens up
- * from round 2 onward, which is what makes the opening screen a gentle
- * introduction rather than a scramble.
+ * In the ROM this is not a difficulty-row flag at all: the fly-in bombing
+ * mask is the second header byte of the stage's caravan row (`b_92E2[1]`,
+ * 0x00 on stage 1 and every challenge row, nonzero from stage 2), gated
+ * per creature by the 44-bit capability table `d_2908` (exported from
+ * `difficultyData.js`). Task 4's caravan machine wires those two together;
+ * until it does, this keeps the observable rule -- entry fire from stage 2,
+ * never on a challenge stage -- with the rank parameter held for the API.
  */
-export function enemiesFireDuringEntry(stage, rank = DifficultyRank.A) {
+export function enemiesFireDuringEntry(stage, _rank = DifficultyRank.A) {
   if (isChallengingStage(stage)) return false;
-  return difficultyRow(stage, rank).entryBombsEnabled;
+  return stage >= 2;
 }
 
 /**
  * Whether enemies drop bombs at all this stage, arriving or attacking.
  *
- * Stage 1 is not merely gentle in the arcade, it is unarmed: the per-stage
- * difficulty table (`bmbr_stg_cfg_dat`) has the bomb-drop enable flags at zero
- * for the opening round *at rank A*, so on a factory machine the only way to
- * die on stage 1 is to be flown into. That is what makes the first screen the
- * place a new player learns the formation without being punished for standing
- * still -- and it is a property of the operator's difficulty setting rather
- * than of the game, which is why the two hard ranks take it away.
+ * An earlier pass believed stage 1 was unarmed at the factory rank -- an
+ * invented flags column said so. The ROM has no such flag: `f_0857` computes
+ * the bomb-drop mask every frame from `d_0909` through the row's parameter
+ * [0], and no reachable cell of that table is zero, so even stage 1's dives
+ * carry one or two bombs (parameter [0] = 0 is d_0909's gentlest ROW, not
+ * "off"; the corpus verified `bombDropFlags = 3` live on stage 1). What is
+ * genuinely unarmed on stage 1 is the fly-in -- see `enemiesFireDuringEntry`.
  *
- * Read straight off the row's enable flags in `difficulty.js`, which is where
- * the arcade keeps it: `FLAG_BOMBS` is zero on row 0 at ranks A and B and set
- * everywhere else.
- *
- * `enemiesFireDuringEntry` remains the narrower rule of the two -- whether a
- * ship still flying into formation may bomb -- and its flag is off on row 0 at
- * every rank, so even the hardest setting lets the opening wave assemble
- * unopposed.
+ * What remains of this gate is the challenge-stage rule: those rows launch
+ * no attacks and their caravan header carries no fly-in mask, so nothing on
+ * them ever bombs. The rank parameter is held for the API.
  */
-export function enemiesBomb(stage, rank = DifficultyRank.A) {
-  if (isChallengingStage(stage)) return false;
-  return difficultyRow(stage, rank).bombsEnabled;
-}
-
-/**
- * The fewest enemies that may be left on screen for a boss to try a beam.
- *
- * With the formation nearly cleared the arcade stops attempting captures
- * entirely. It reads as the survivors going all-out rather than one of them
- * breaking off to set a trap, and mechanically it stops the end of a stage from
- * being decided by a capture the player has no formation left to hunt the
- * captor through.
- */
-export const CAPTURE_MIN_ENEMIES = 5;
-
-/**
- * The threshold at a given rank.
- *
- * The capture flag lives in the same per-rank table as the bombing flags, so a
- * harder machine keeps setting traps deeper into a thinning formation. Floored
- * at two, because a capture attempted by the last enemy on screen leaves the
- * player nothing to shoot the captor out of.
- */
-export function captureMinEnemies(rank = DifficultyRank.A) {
-  return Math.max(CAPTURE_MIN_ENEMIES - normalizeRank(rank), 2);
+export function enemiesBomb(stage, _rank = DifficultyRank.A) {
+  return !isChallengingStage(stage);
 }
 
 /**
  * Whether a Boss Galaga may attempt a tractor beam right now.
  *
- * Two gates, neither of them a clock. The arcade enables captures per stage
- * through a flag in the same difficulty table that disarms stage 1, and stops
- * attempting them once the formation is down to a handful. The scene still runs
- * a timer to decide *when* to try; this decides whether trying is legal at all.
+ * The arcade does not stage-gate captures: every other boss launch is a solo
+ * capture dive from stage 1 onward (gg1-2_fx.s:1013-1043), one at a time.
+ * The pass-5 capture flag and its minimum-formation threshold were both
+ * invented and are gone. What is left is structural: a challenge stage has
+ * no formation to launch a captor from, and a capture needs at least one
+ * enemy alive to be the captor. The scene still runs its own timer to decide
+ * *when* to try until Task 5 moves the attempt onto the boss launch
+ * alternation the scheduler now exposes.
  */
-export function captureAllowed(stage, enemiesRemaining, rank = DifficultyRank.A) {
+export function captureAllowed(stage, enemiesRemaining, _rank = DifficultyRank.A) {
   if (isChallengingStage(stage)) return false;
-  if (!difficultyRow(stage, rank).captureEnabled) return false;
-  return enemiesRemaining > captureMinEnemies(rank);
+  return enemiesRemaining > 0;
 }
 
 /**
@@ -178,17 +154,17 @@ export function entrancePatternFor(stage, rank = DifficultyRank.A) {
 /**
  * Difficulty knobs for a stage, at a rank.
  *
- * Read out of the 4 x 26 x 10 table in `difficulty.js` -- the ROM's own
- * structure -- and decoded twice over: the raw per-type launch counters and
- * flags come through untouched for the attack scheduler, and the legacy
- * knobs the scene still reads (`diveIntervalMs`, `maxSimultaneousDivers`,
- * `bombChance`...) are derived from the same cells, so there is exactly one
- * source of difficulty and the two views cannot drift.
+ * The decoded row from `difficulty.js` -- the ROM's ten nibble parameters
+ * plus the computed clone-attack gate -- passed through whole, because the
+ * attack scheduler feeds `parms` back into the per-frame `bomberConfig`
+ * lookup. There are no per-stage launch cadences here: cadence is the fixed
+ * initial timers plus reloads recomputed every frame from the live board,
+ * which is `attack.js`'s job now.
  *
- * The dive speed multiplier comes from the per-stage flight vectors in
- * `paths.js` -- the same table that picks which dive block a type flies --
- * with a small rank term on top, because the vectors are a property of the
- * stage and the rank is the operator's thumb on the scale.
+ * The one authored knob left is `diveSpeed`, the tween multiplier for the
+ * scene's current dive geometry, from the per-stage flight vectors in
+ * `paths.js` with a small rank term on top. Task 3 replaces that geometry
+ * with the ROM's path bytecode, at which point it goes too.
  *
  * There is deliberately no rate of fire for the formation. In the arcade an
  * enemy only ever bombs while it is flying, on its way in or on an attack run;
@@ -202,11 +178,7 @@ export function stageDifficulty(stage, rank = DifficultyRank.A) {
 
   return {
     ...row,
-    diveIntervalMs: Math.round(row.launchMs.zako),
-    maxSimultaneousDivers: row.maxActiveBombers,
     diveSpeed: Math.round((speed / 8.2 + level * 0.05) * 100) / 100,
-    escortChance: Math.min(0.2 + row.cloneAttackCount * 0.25 + level * 0.05, 0.9),
-    bombChance: Math.min(0.35 + row.continuousBombs * 0.15 + level * 0.08, 0.95),
   };
 }
 
