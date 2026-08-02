@@ -9,7 +9,7 @@
  */
 
 import { CHALLENGING_PATTERN_COUNT } from './paths.js';
-import { ENTRANCE_PATTERN_COUNT, EnemyType, FORMATION_SIZE } from './formation.js';
+import { ENTRANCE_PATTERN_COUNT } from './formation.js';
 import {
   CARAVAN_ROW_COUNT,
   COMBAT_STAGE_ROWS,
@@ -17,6 +17,7 @@ import {
   RANK_COUNT,
   RANK_NAMES,
   caravanFor,
+  caravanHeaderFor,
   caravanIndexFor,
   combatStageIndex,
   normalizeRank,
@@ -71,17 +72,17 @@ export function nextStage(stage) {
 /**
  * Whether arriving enemies bomb while still flying into formation.
  *
- * In the ROM this is not a difficulty-row flag at all: the fly-in bombing
- * mask is the second header byte of the stage's caravan row (`b_92E2[1]`,
- * 0x00 on stage 1 and every challenge row, nonzero from stage 2), gated
- * per creature by the 44-bit capability table `d_2908` (exported from
- * `difficultyData.js`). Task 4's caravan machine wires those two together;
- * until it does, this keeps the observable rule -- entry fire from stage 2,
- * never on a challenge stage -- with the rank parameter held for the API.
+ * The real thing now: the fly-in bombing mask is the second header byte of
+ * the stage's caravan row (`b_92E2[1]`, gg1-3.s:1243-1246), zero on stage 1
+ * and on every challenge row -- and also on any later stage whose rank's
+ * index table replays row 0 (the factory rank's stage 10, rank B's stage 6):
+ * those stages genuinely fly in silent. The per-creature d_2908 gate and the
+ * 0x03 double-drop tier ride the mask itself through the caravan machine;
+ * this predicate answers the stage-level question.
  */
-export function enemiesFireDuringEntry(stage, _rank = DifficultyRank.A) {
+export function enemiesFireDuringEntry(stage, rank = DifficultyRank.A) {
   if (isChallengingStage(stage)) return false;
-  return stage >= 2;
+  return caravanHeaderFor(stage, rank).flyInBombMask !== 0;
 }
 
 /**
@@ -204,31 +205,12 @@ export function transformTypeFor(stage) {
   return TRANSFORM_CYCLE[Math.floor((stage - 4) / 4) % TRANSFORM_CYCLE.length];
 }
 
-/**
- * Who flies a Challenging Stage.
- *
- * A bonus round is not the attack formation flying a different route: it is
- * "one type of enemy along with four Boss Galaga" -- Zako in the first, Goei in
- * the second, alternating from there. That is what makes the eight bonus rounds
- * distinguishable from one another beyond their choreography, and what makes
- * the four bosses among them read as the thing worth aiming at.
- *
- * Returned in formation-slot order, so the four bosses come first and the
- * scene's existing five-flights-of-eight split puts them at the head of the
- * opening wave. Null for a normal stage, which has a real formation instead.
- */
-export function challengingRoster(stage) {
-  const pattern = challengingPatternIndex(stage);
-  if (pattern === null) return null;
-
-  const rank = pattern % 2 === 0 ? EnemyType.ZAKO : EnemyType.GOEI;
-  return Array.from({ length: FORMATION_SIZE }, (_slot, index) =>
-    index < CHALLENGING_BOSSES ? EnemyType.BOSS : rank,
-  );
-}
-
-/** Boss Galaga in every Challenging Stage, however the rest of it is filled. */
-const CHALLENGING_BOSSES = 4;
+// A Challenging Stage has no roster of its own any more: the ROM flies the
+// SAME 40 `db_attk_wav_IDs` over the challenge rows -- 20 bees, 16
+// butterflies and the four bosses in wave 2, exactly as a combat stage
+// launches them (docs/rom-research/stage-init.md section 3.3). The authored
+// "one rank plus four bosses" roster this file used to hold contradicted the
+// corpus data and is gone; membership falls out of the caravan machine.
 
 /** Flag denominations shown bottom-right, highest first. */
 const FLAG_VALUES = [50, 30, 20, 10, 5, 1];

@@ -118,11 +118,28 @@ describe('entry flights', () => {
     }
   });
 
-  it('delivers every index entry to the formation slot', () => {
-    for (const { path } of everyEntry()) {
+  it('delivers the six combat entries to the formation slot', () => {
+    // Only indices 0-5 -- the token-bearing blocks the combat rows select --
+    // carry an FB home. The old shim that forced 6-23 home died with the
+    // authored caravan rows that mis-selected them for combat.
+    for (let variant = 0; variant < 6; variant += 1) {
+      for (const mirrored of [false, true]) {
+        const end = pointOnPath(entryPath(variant, target, screen, mirrored), 1);
+        expect(end.x).toBeCloseTo(target.x, 6);
+        expect(end.y).toBeCloseTo(target.y, 6);
+      }
+    }
+  });
+
+  it('flies the token-free entries through without homing', () => {
+    // Indices 6-23 are the challenge fly-throughs: their streams end FF and
+    // the compiled track ends wherever the flight died, never on the slot.
+    for (const { variant, path } of everyEntry()) {
+      if (variant < 6) continue;
       const end = pointOnPath(path, 1);
-      expect(end.x).toBeCloseTo(target.x, 6);
-      expect(end.y).toBeCloseTo(target.y, 6);
+      const onSlot =
+        Math.abs(end.x - target.x) < 1e-6 && Math.abs(end.y - target.y) < 1e-6;
+      expect(onSlot).toBe(false);
     }
   });
 

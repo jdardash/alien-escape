@@ -54,6 +54,38 @@ export function createEnemy(scene, group, slot, position, frame = 0) {
 }
 
 /**
+ * One caravan transient: a fly-through member riding a combat wave.
+ *
+ * From stage 4 the caravan control byte injects extra members into the entry
+ * stream (object IDs 0x38-0x3E) that fly the wave's own entrance path, take
+ * the F7 branch onto a player-targeted swoop, and leave -- they never join
+ * the grid, never home and never bomb (`l_29B3`, gg1-3.s:1806-1822). They
+ * are collision-live ordinary members of the enemy group: shootable,
+ * scoreable as their type, and able to ram the player.
+ */
+export function createTransientEnemy(scene, group, type, position, frame = 0) {
+  const sprite = type === EnemyType.BOSS ? BOSS_SPRITE.healthy : type;
+
+  const enemy = group.create(position.x, position.y, shipTextureKey(sprite)).setOrigin(0.5);
+  applyShipArt(enemy, sprite, { frame });
+  enemy.artName = sprite;
+
+  enemy.body.setSize(enemy.width * 0.62, enemy.height * 0.62, true);
+  enemy.body.setAllowGravity(false);
+
+  enemy.slot = null;
+  enemy.enemyType = type;
+  enemy.health = ENEMY_HEALTH[type];
+  enemy.mode = EnemyMode.PASSING;
+  enemy.flight = null;
+  enemy.hasBombed = false;
+  enemy.transient = true;
+  enemy.bombMask = 0;
+
+  return enemy;
+}
+
+/**
  * Show that a Boss Galaga has taken its first of two hits.
  *
  * A swap to the damaged palette rather than a tint over the healthy one. Both

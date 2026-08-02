@@ -25,7 +25,6 @@ import {
   SHIP_DRAWN_PX,
   SPRITE_SCALE,
   SPRITE_SOURCE_PX,
-  CHALLENGING,
   TRANSFORM,
   ANIMATION,
   FLAG_ART,
@@ -41,22 +40,27 @@ import { EXPLOSION_SPRITES, frameCount } from '../art/pixelArt.js';
 import {
   EnemyType,
   buildFormationSlots,
-  buildEntryGroups,
-  breathScaleAt,
-  swayOffsetAt,
   slotWorldPosition,
-  clampFormationCentre,
+  slotIndexForObjectId,
+  slotMotionOffset,
+  createFormationMotion,
+  advanceFormationMotion,
   FORMATION_SIZE,
 } from '../systems/formation.js';
 import {
+  compileStageStream,
+  createWaveLauncher,
+  stepWaveLauncher,
+  decodeLaunch,
+  caravanHeaderFor,
+} from '../systems/caravans.js';
+import {
   divePath,
   returnPath,
-  challengingPath,
   captiveEscapePath,
   entrySpawnPoint,
   createEntryFlightState,
   createDiveFlightState,
-  pointOnPath,
 } from '../systems/paths.js';
 import {
   createFlight,
@@ -105,13 +109,9 @@ import {
   isChallengingStage,
   stageDifficulty,
   stageFlags,
-  enemiesFireDuringEntry,
   enemiesBomb,
   captureAllowed,
-  challengingPatternIndex,
-  challengingRoster,
   transformTypeFor,
-  caravanFor,
   RANK_NAMES,
   nextStage,
 } from '../systems/stages.js';
@@ -161,6 +161,7 @@ import {
 import {
   EnemyMode,
   createEnemy,
+  createTransientEnemy,
   isDiving,
   canBeginDive,
   settleIntoFormation,
@@ -252,8 +253,11 @@ export class GameScene extends Phaser.Scene {
     this.stageResolving = false;
     this.formationElapsed = 0;
     this.challengingHits = 0;
-    this.currentBreath = 1;
-    this.currentSway = 0;
+    this.formationMotion = createFormationMotion();
+    this.formationHandoff = false;
+    this.waveLauncher = null;
+    this.waveEnabled = false;
+    this.launcherAccMs = 0;
 
     // Generated rather than loaded: every ship in the game is pixel art
     // authored in `src/art`, so the textures are built once here, before
@@ -789,6 +793,16 @@ export class GameScene extends Phaser.Scene {
     this.challenging = isChallengingStage(stage);
     this.transformType = transformTypeFor(stage);
 
+    // The stg_init_env beats this scene keeps: the caravan header latched to
+    // b_92E2, a fresh formation-motion machine (oscillate re-enabled,
+    // nestlr_inh cleared), and the launcher held until the splash clears.
+    this.caravanHeader = caravanHeaderFor(stage, this.rank);
+    this.formationMotion = createFormationMotion();
+    this.formationHandoff = false;
+    this.waveLauncher = null;
+    this.waveEnabled = false;
+    this.launcherAccMs = 0;
+
     // The stage's attack scheduler: per-type launch counters out of the
     // difficulty row. It starts counting when the wave finishes assembling.
     this.attack = createAttackScheduler(this.difficulty);
@@ -820,147 +834,132 @@ export class GameScene extends Phaser.Scene {
 
     this.time.delayedCall(1800, () => {
       if (this.isGameOver) return;
-      if (this.challenging) {
-        this.launchChallengingStage();
-      } else {
-        this.launchFormation();
+      this.startWaveLauncher();
+    });
+  }
+
+  /**
+   * Arm the stage's wave launcher: compile the caravan row into the runtime
+   * byte stream and flip the two-phase enable, the way `plyr_respawn_rdy`
+   * flips `_b_atk_wv_enbl` once the splash has cleared and the ship is on
+   * the board. From here `updateWaveLauncher` walks the stream one byte per
+   * hardware frame; enemies are created AT launch, and the stage-clear check
+   * holds until the walker reports done.
+   *
+   * The same machine runs a Challenging Stage: the stream compiles from the
+   * challenge rows, whose members fly the token-free blocks and despawn
+   * instead of homing, with the full 40-ID roster -- so the four bosses ride
+   * wave 2 of a bonus round exactly as they do on a combat stage.
+   */
+  startWaveLauncher() {
+    this.formationSlots = buildFormationSlots();
+    this.waveLauncher = createWaveLauncher(compileStageStream(this.stage, this.rank));
+    this.waveEnabled = true;
+    this.launcherAccMs = 0;
+
+    if (!this.challenging) this.scheduleCaptureAttempts();
+  }
+
+  /**
+   * Walk the launcher, one stream byte per hardware frame -- the f_2916
+   * cadence: gated launches on the frame & 7 beat, wing-men one frame behind
+   * their leaders, waves held while launched members are still flying (plus
+   * the ~1 s game-timer wait on a challenge stage), a 12-slot in-flight cap.
+   */
+  updateWaveLauncher(delta) {
+    if (!this.waveLauncher || this.waveLauncher.done || this.stageResolving) return;
+
+    this.launcherAccMs += Math.max(delta, 0);
+    let frames = Math.floor(this.launcherAccMs / FRAME_MS + 1e-9);
+    this.launcherAccMs -= frames * FRAME_MS;
+
+    while (frames > 0) {
+      frames -= 1;
+      const flying = this.countFlyingEntries();
+      const { state, launch, completed } = stepWaveLauncher(this.waveLauncher, {
+        enabled: this.waveEnabled && this.player.active,
+        bugsFlying: flying,
+        inFlight: flying,
+        challenge: this.challenging,
+      });
+      this.waveLauncher = state;
+
+      if (launch) this.spawnWaveMember(launch);
+      if (completed) {
+        this.onWaveLauncherComplete();
+        return;
       }
-    });
+    }
+  }
+
+  /** Launched members still path-flying: the ROM's `b_bugs_flying_nbr`. */
+  countFlyingEntries() {
+    return this.enemies
+      .getChildren()
+      .filter(
+        (enemy) =>
+          enemy.active &&
+          enemy.flight &&
+          (enemy.mode === EnemyMode.ENTERING || enemy.mode === EnemyMode.PASSING),
+      ).length;
   }
 
   /**
-   * Bring the wave on as five flights of eight, in this stage's entrance
-   * pattern.
-   *
-   * The pattern is a property of the stage, not of the flight: all five
-   * flights of a wave belong to one of the arcade's three entrances, which is
-   * what makes an entrance recognisable rather than a shuffle. Within it, each
-   * member carries the curve it flies and its step in the launch order, so the
-   * both-sides pattern can put two arrivals in the air at once while the other
-   * two stay single file.
-   *
-   * All forty sprites are created up front, parked at their curve's off-screen
-   * start, and only their flights are staggered. That matters: the stage is
-   * considered clear when no enemy is left alive, so an enemy waiting to
-   * launch has to already exist.
+   * One launch off the stream, decoded the way `l_2974` sets a motion slot
+   * up: the object ID names the formation slot through `sprt_fmtn_hpos`, the
+   * path byte the entrance shape, member and gate; the fly-in bomb string is
+   * the caravan header's mask gated by the creature's d_2908 bit, counting
+   * down from the bit-0 seed (0x08 top entrant / 0x44 side entrant). A
+   * transient ID takes none of that: it flies the same entrance, branches at
+   * the F7 token onto its swoop, and despawns at its FF.
    */
-  launchFormation() {
-    // Round 1 holds fire through the whole assembly; from round 2 the arriving
-    // wave bombs on its way in.
-    const entryFire = enemiesFireDuringEntry(this.stage);
-    const slots = buildFormationSlots();
-    // The caravan is a property of the stage *and* the operator's rank, which
-    // is the arcade's own `d_combat_stg_dat_idx[rank * 17 + row]`. Every member
-    // carries the shape it flies, whether that shape is mirrored, and the beat
-    // it launches on, all decoded out of the row's path bytes.
-    const groups = buildEntryGroups(caravanFor(this.stage, this.rank));
+  spawnWaveMember(launch) {
+    const info = decodeLaunch(launch, { flyInBombMask: this.caravanHeader.flyInBombMask });
+    const start = entrySpawnPoint(info.pathIndex, info.member, SCREEN);
+    const flight = () =>
+      createLiveFlight(
+        createEntryFlightState(info.pathIndex, info.member, { objectId: info.objectId }),
+        SCREEN,
+      );
 
-    groups.forEach((group) => {
-      const groupDelay = group.index * FORMATION.groupIntervalMs;
+    if (info.transient) {
+      const type =
+        info.transientKind === 'redmoth'
+          ? EnemyType.GOEI
+          : info.transientKind === 'boss'
+            ? EnemyType.BOSS
+            : EnemyType.ZAKO;
+      const enemy = createTransientEnemy(this, this.enemies, type, start, this.flapFrame);
+      enemy.flight = flight();
+      return;
+    }
 
-      group.members.forEach(({ slotIndex, pathVariant, mirrored, step }) => {
-        const slot = slots[slotIndex];
-        // Spawn where the db_2A6C variant row puts this pair member: bit 6
-        // of the wave byte picks the member AND negates its rotations.
-        const start = entrySpawnPoint(pathVariant, mirrored ? 1 : 0, SCREEN);
-        const enemy = createEnemy(this, this.enemies, slot, start, this.flapFrame);
-        // An arriving ship gets at most one shot on the way in, and only from
-        // stage 2. Interim: the ROM masks fly-in bombing per creature through
-        // the caravan header byte and the d_2908 capability bits; Task 4's
-        // caravan machine wires those, and until then a one-in-four draw
-        // stands in for the bit distribution.
-        enemy.bombMask = entryFire && !this.noFire.triggered && Math.random() < 0.25 ? 1 : 0;
-        enemy.bombCountdownMs = BOMB_ARM_FRAMES * FRAME_MS;
+    const slot = this.formationSlots[slotIndexForObjectId(info.objectId)];
+    const enemy = createEnemy(this, this.enemies, slot, start, this.flapFrame);
 
-        this.time.delayedCall(groupDelay + step * FORMATION.entryStaggerMs, () => {
-          if (!enemy.active) return;
-          // A LIVE flight on the ROM's path machine: the block flies its
-          // segments and the FB turn-home glides onto the slot's live,
-          // swaying position, fed in as homeTarget every frame. Formation
-          // object ids stay clear of the transient window (0x38-0x3E) so
-          // the F7 gate never fires for a formation member; Task 4's
-          // caravan machine launches the real transients through it.
-          enemy.flight = createLiveFlight(createEntryFlightState(pathVariant, mirrored ? 1 : 0), SCREEN);
-        });
-      });
-    });
+    if (this.challenging) {
+      // A challenge member keeps its rank for art and scoring but has no
+      // home: its block ends FF and the flight despawns it off the field.
+      enemy.slot = null;
+      enemy.mode = EnemyMode.PASSING;
+      enemy.bombMask = 0;
+    } else {
+      enemy.bombMask = this.noFire.triggered ? 0 : info.bombMask;
+      enemy.bombCountdownMs = info.bombCounterInit * FRAME_MS;
+    }
 
-    this.scheduleCaptureAttempts();
-
-    // The arcade lets the wave finish arriving before anything attacks, so the
-    // entry choreography is never cut across by a dive.
-    this.assemblyTimer = this.time.delayedCall(this.assemblyDurationMs(groups), () => {
-      this.assemblyTimer = null;
-      if (this.isGameOver || this.stageResolving) return;
-      // The arcade lets the wave finish arriving before anything attacks;
-      // from here the per-type launch counters run.
-      this.attackActive = true;
-    });
+    enemy.flight = flight();
   }
 
   /**
-   * How long the whole wave takes, from the first launch to the last dock.
-   *
-   * Read off the last member's step rather than assumed to be eight, because a
-   * both-sides flight launches its eight in four paired steps and is home
-   * sooner. Taking the maximum keeps the "nothing attacks until everyone has
-   * landed" rule true for every pattern.
+   * The 0x7F fired with the sky clear: the ROM's moment to enable the
+   * bomber-attack and bonus-bee tasks and raise `_b_nestlr_inh` -- the
+   * formation's coast-to-centre handoff into the breathing pulse.
    */
-  assemblyDurationMs(groups) {
-    const lastStep = Math.max(
-      ...groups.flatMap((group) => group.members.map((member) => member.step)),
-    );
-
-    return (
-      (groups.length - 1) * FORMATION.groupIntervalMs +
-      lastStep * FORMATION.entryStaggerMs +
-      FORMATION.entryDurationMs
-    );
-  }
-
-  /**
-   * Challenging Stage: forty enemies fly through and never fire or dive.
-   * Clearing all of them pays the perfect bonus.
-   *
-   * Structured like the entry wave, as five flights of eight rather than one
-   * forty-ship stream. Everyone in a flight shares one route and one lane, so
-   * the eight arrive nose to tail and can be swept with a single held line of
-   * fire; the lane changes between flights so the pattern is traced out across
-   * the field instead of being redrawn in the same place five times.
-   */
-  launchChallengingStage() {
-    const pattern = challengingPatternIndex(this.stage) ?? 0;
-    // A bonus round is not the attack formation flying a different route: it is
-    // one rank of enemy plus four Boss Galaga. The slots are still the
-    // formation's, because they are what splits forty ships into five flights
-    // of eight, but who sits in them comes from `challengingRoster`.
-    const roster = challengingRoster(this.stage) ?? [];
-    const slots = buildFormationSlots().map((slot, index) => ({
-      ...slot,
-      type: roster[index] ?? slot.type,
-    }));
-
-    buildEntryGroups().forEach((group) => {
-      const groupDelay = group.index * CHALLENGING.groupIntervalMs;
-      // One offset for the whole flight: same curve, same lane, single file.
-      const path = challengingPath(pattern, group.index, SCREEN);
-
-      group.slotIndices.forEach((slotIndex, position) => {
-        const enemy = createEnemy(
-          this,
-          this.enemies,
-          slots[slotIndex],
-          pointOnPath(path, 0),
-          this.flapFrame,
-        );
-        enemy.mode = EnemyMode.PASSING;
-
-        this.time.delayedCall(groupDelay + position * CHALLENGING.staggerMs, () => {
-          if (!enemy.active) return;
-          enemy.flight = createFlight(path, CHALLENGING.passDurationMs);
-        });
-      });
-    });
+  onWaveLauncherComplete() {
+    this.formationHandoff = true;
+    if (this.isGameOver || this.stageResolving) return;
+    if (!this.challenging) this.attackActive = true;
   }
 
   completeStage() {
@@ -1929,6 +1928,7 @@ export class GameScene extends Phaser.Scene {
     this.updateStarfield(delta);
     this.formationElapsed += delta;
 
+    this.updateWaveLauncher(delta);
     this.updateFormation(delta);
     this.updateAttacks(delta);
     this.updateDiveSound();
@@ -1971,13 +1971,13 @@ export class GameScene extends Phaser.Scene {
   }
 
   updateFormation(delta) {
-    this.currentBreath = breathScaleAt(this.formationElapsed, {
-      periodMs: FORMATION.breathPeriodMs,
-      amplitude: FORMATION.breathAmplitude,
-    });
-    this.currentSway = swayOffsetAt(this.formationElapsed, {
-      periodMs: FORMATION.swayPeriodMs,
-      amplitude: FORMATION.swayAmplitude,
+    // The ROM's two-phase grid motion: the fly-in triangle sway until the
+    // launcher raises the handoff flag, a coast back to centre, then the
+    // d_1E64 bitmap pulse -- per-column X and per-row Y offsets, stepped at
+    // 15 Hz. `slotPosition` reads the offsets, so every parked ship and
+    // every FB home glide rides the same motion.
+    this.formationMotion = advanceFormationMotion(this.formationMotion, delta, {
+      handoff: this.formationHandoff,
     });
 
     // One wing-frame read for the whole pass: every alien on the board,
@@ -2337,8 +2337,10 @@ export class GameScene extends Phaser.Scene {
 
   checkStageComplete() {
     if (this.stageResolving || this.enemies.countActive(true) > 0) return;
-    // Enemies launch on a stagger, so an empty group during the launch window
-    // is not a cleared stage.
+    // The ROM's own gate (gctl_supv_stage): no active enemies AND the wave
+    // launcher done. Enemies now spawn as the stream walks, so an empty
+    // board mid-launch is not a cleared stage.
+    if (this.waveLauncher && !this.waveLauncher.done) return;
     if (this.formationElapsed < 2000) return;
     this.completeStage();
   }
@@ -2346,19 +2348,19 @@ export class GameScene extends Phaser.Scene {
   // ---------------------------------------------------------------- helpers
 
   slotPosition(slot) {
-    const centreX = clampFormationCentre(SCREEN.width / 2, SCREEN.width, {
-      spacingX: FORMATION.spacingX,
-      breathScale: this.currentBreath,
-      margin: FORMATION.margin,
-    });
+    // The motion machine's offsets are ROM px; the x3 adapter scales them.
+    // With the ROM's own 16-px column pitch (spacingX 48) the peak spread
+    // lands the outer sprite exactly on the screen edge, so no clamp is
+    // needed -- the geometry is the cabinet's.
+    const offset = slotMotionOffset(this.formationMotion, slot, ROM_TO_SCREEN);
 
     return slotWorldPosition(slot, {
-      centreX,
+      centreX: SCREEN.width / 2,
       topY: FORMATION.topY,
       spacingX: FORMATION.spacingX,
       spacingY: FORMATION.spacingY,
-      breathScale: this.currentBreath,
-      swayX: this.currentSway,
+      offsetX: offset.x,
+      offsetY: offset.y,
     });
   }
 
@@ -2489,11 +2491,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   clearTimers() {
-    this.assemblyTimer?.remove();
-    this.assemblyTimer = null;
     this.captureTimer?.remove();
     this.captureTimer = null;
-    // The attack scheduler is not a timer, but it stops with them.
+    // The wave launcher and the attack scheduler are not timers, but they
+    // stop with them.
+    this.waveEnabled = false;
     this.attackActive = false;
   }
 }

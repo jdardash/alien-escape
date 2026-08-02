@@ -14,13 +14,11 @@ import {
   COMBAT_STAGE_ROWS,
   enemiesBomb,
   captureAllowed,
-  challengingRoster,
   nextStage,
   STAGE_ROLLOVER,
   DifficultyRank,
   RANK_COUNT,
 } from '../src/systems/stages.js';
-import { EnemyType } from '../src/systems/formation.js';
 
 describe('challenging stage cadence', () => {
   it('lands on stage 3 and every fourth stage after it', () => {
@@ -85,6 +83,15 @@ describe('firing during entry', () => {
       }
     }
   });
+
+  it('goes silent again where the real index tables replay the stage-1 row', () => {
+    // The header mask is the caravan row's, and the rank's idx set decides
+    // the row: the factory rank flies row 0 (mask 0) again on stage 10,
+    // rank B on stage 6. Sourced, not a bug (gg1-3.s:1438, 1441).
+    expect(enemiesFireDuringEntry(10, DifficultyRank.A)).toBe(false);
+    expect(enemiesFireDuringEntry(6, DifficultyRank.B)).toBe(false);
+    expect(enemiesFireDuringEntry(6, DifficultyRank.A)).toBe(true);
+  });
 });
 
 describe('challenging stage patterns', () => {
@@ -142,10 +149,15 @@ describe('entrance patterns', () => {
     }
   });
 
-  it('reaches every caravan within one pass of the row cycle', () => {
+  // Corrected in pass 6: the factory rank's real index row never selects
+  // caravan 5 (the ROM holds it for raw ranks 0-2) and replays rows 0, 4,
+  // 10 and 12 instead -- twelve distinct caravans in a pass, not thirteen.
+  // All thirteen are reachable across the four ranks (tests/caravans.test.js).
+  it('reaches twelve of the thirteen caravans in one factory-rank pass', () => {
     const seen = new Set();
     for (let stage = 1; stage <= 23; stage += 1) seen.add(entrancePatternFor(stage));
-    expect(seen.size).toBe(ENTRANCE_PATTERN_COUNT);
+    expect(seen.size).toBe(ENTRANCE_PATTERN_COUNT - 1);
+    expect(seen.has(5)).toBe(false);
   });
 
   // Consecutive *combat* stages, not consecutive stage numbers: the arcade's
@@ -236,38 +248,12 @@ describe('capture gating', () => {
   });
 });
 
-describe('challenging stage roster', () => {
-  it('has no roster for a normal stage', () => {
-    expect(challengingRoster(2)).toBeNull();
-  });
-
-  it('brings forty enemies', () => {
-    expect(challengingRoster(3)).toHaveLength(40);
-  });
-
-  it('brings exactly four Boss Galaga', () => {
-    for (const stage of [3, 7, 11, 15, 19]) {
-      const bosses = challengingRoster(stage).filter((type) => type === EnemyType.BOSS);
-      expect(bosses).toHaveLength(4);
-    }
-  });
-
-  it('fills the rest of the wave with a single rank', () => {
-    for (const stage of [3, 7, 11, 15, 19, 23, 27, 31]) {
-      const ranks = new Set(challengingRoster(stage).filter((type) => type !== EnemyType.BOSS));
-      expect(ranks.size).toBe(1);
-    }
-  });
-
-  it('flies Zako in the first bonus round and Goei in the second', () => {
-    expect(challengingRoster(3).at(-1)).toBe(EnemyType.ZAKO);
-    expect(challengingRoster(7).at(-1)).toBe(EnemyType.GOEI);
-  });
-
-  it('puts the bosses at the front, where the formation keeps them', () => {
-    expect(challengingRoster(3).slice(0, 4)).toEqual(Array(4).fill(EnemyType.BOSS));
-  });
-});
+// The authored challenging-stage roster ("one rank plus four bosses") was
+// overturned in pass 6: the ROM flies the SAME 40 db_attk_wav_IDs over the
+// challenge rows -- 20 bees, 16 butterflies, 4 bosses in wave 2 -- through
+// the identical caravan stream machine. Membership is pinned where it now
+// lives: tests/caravans.test.js (the challenge stream) and
+// tests/formation.test.js (wave membership).
 
 describe('transform bonus enemies', () => {
   it('does not appear before stage 4', () => {

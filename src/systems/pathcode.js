@@ -577,26 +577,6 @@ export function stepFlight(state, context = {}) {
   return events;
 }
 
-/**
- * Force a finished flight into the FB turn-home procedure.
- *
- * Interim shim for the compiled entry paths: the token-free fly-through
- * blocks end FF with no home of their own, but the authored caravan rows
- * still select them for combat entries until Task 4 lands the real stream
- * machine. This applies exactly the FB procedure -- aim once, glide, snap --
- * with the standard `23 00 FF` tail speed when the block left none running.
- */
-export function beginHomeGlide(state, context) {
-  turnHome(state, context);
-  if (state.vx === 0 && state.vy === 0) {
-    state.vx = 3;
-    state.vy = 2;
-  }
-  state.segTimer = 0xff;
-  state.done = false;
-  state.overrun = false;
-}
-
 /** Whether a state has left the fly-through despawn box. */
 export function isDespawned(state) {
   const { x, y } = toCanvas(state);

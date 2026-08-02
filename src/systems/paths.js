@@ -37,7 +37,6 @@ import {
 import {
   ROM_CANVAS,
   asTrack,
-  beginHomeGlide,
   canvasToRaw,
   createFlightState,
   directionToAngle,
@@ -186,15 +185,16 @@ function flewOut(state) {
  *
  * `variant` indexes `db_2A3C`; `mirrored` is wave-byte bit 6 -- the second
  * pair member, spawning at its own `db_2A6C` row with every rotation
- * negated. The block flies to its FB and the homing glide delivers it to
- * `target`, which is frozen at compile time; the scene's live entry flights
- * feed the swaying slot instead. `stage8Switch` resolves the F0 gate.
+ * negated. The six combat blocks (0-5) fly to their FB and the homing glide
+ * delivers them to `target`, frozen at compile time; the scene's live entry
+ * flights feed the swaying slot instead. `stage8Switch` resolves the F0
+ * gate.
  *
- * The token-free blocks (indices 6-23) never home in the ROM -- they are
- * challenge fly-throughs ending FF. Until Task 4 replaces the authored
- * caravan rows that still select them for combat, a block that ends without
- * homing is turned home from where it stopped (the FB procedure, glide at
- * the standard `23` tail speed). Interim shim, labelled here.
+ * The token-free blocks (indices 6-23) never home in the ROM: they are the
+ * challenge fly-throughs, ending FF. Compiling one of those here yields the
+ * fly-through track as flown, no glide -- the interim home-glide shim this
+ * function used to carry died with the authored caravan rows that selected
+ * these blocks for combat.
  */
 export function entryPath(variant, target, screen, mirrored = false, { stage8Switch = false } = {}) {
   const scale = screenScale(screen);
@@ -207,17 +207,10 @@ export function entryPath(variant, target, screen, mirrored = false, { stage8Swi
     continuousBombing: false,
   };
 
-  // The six combat blocks fly whole and home themselves; a token-free block
-  // pressed into combat duty is cut where it leaves the field and turned
-  // home from there rather than compiling its off-screen tail.
   const points = compileFlight(state, context, { stopWhen: flewOut });
-  if (!state.homed) {
-    beginHomeGlide(state, context);
-    points.push(...compileFlight(state, context));
-  }
-  // Land the final sample exactly on the slot: the snap is within +/-1 raw
-  // (2 canvas px) and the scene parks the sprite on the slot anyway.
-  points.push(toRomPoint(target, scale));
+  // Land the final sample exactly on the slot: the FB snap is within +/-1
+  // raw (2 canvas px) and the scene parks the sprite on the slot anyway.
+  if (state.homed) points.push(toRomPoint(target, scale));
 
   return asTrack(points.map((point) => scalePoint(point, scale)));
 }

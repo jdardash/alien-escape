@@ -79,34 +79,26 @@ export const PLAYER = {
 };
 
 /**
- * Formation geometry and the timing of the wave that assembles it.
+ * Formation geometry.
  *
- * The spacing is set against the sprites' drawn size rather than by eye: the
- * artwork is opaque out to the edge of its frame, so any spacing tighter than
- * a sprite's display width shows as a solid block of overlapping ships rather
- * than a grid. Breathing widens that spacing, so the amplitude has to leave
- * headroom for it too.
+ * `spacingX` is the ROM's own column pitch: 16 ROM px through the x3 screen
+ * adapter. That is not only fidelity -- it is what makes the ROM's formation
+ * motion fit the field. The fly-in sway and the breathing pulse (ported in
+ * `src/systems/formation.js`) move the outer columns up to +/-32 ROM px
+ * (96 screen px), and at that spread the outermost sprite lands exactly on
+ * the screen edge, as it does on the cabinet: canvas 216 + half a 16 px
+ * sprite = 224. The old 57 px spacing pushed the peak off screen.
  *
- * On a 672-wide field the ten-column grid is the binding constraint. At peak
- * inhale the outermost column sits at
- * `width / 2 + 4.5 * spacingX * (1 + breathAmplitude) + swayAmplitude`, and
- * that has to stay inside `width - margin`. `tests/formation.test.js` pins it.
+ * The motion's periods and amplitudes are no longer tuned here: the triangle
+ * sway (1 px per 4 frames, +/-32) and the d_1E64 bitmap pulse are the ROM's
+ * machines, data-driven in `formation.js`. Entry timing constants are gone
+ * too -- the wave launcher walks the caravan byte stream one byte per frame.
  */
 export const FORMATION = {
   topY: 110,
-  spacingX: 57,
+  spacingX: 48,
   spacingY: 60,
-  breathPeriodMs: 4200,
-  breathAmplitude: 0.08,
-  swayPeriodMs: 7000,
-  swayAmplitude: 14,
   margin: 26,
-  /** Time for an enemy to fly its entry path into formation. */
-  entryDurationMs: 2600,
-  /** Gap between successive enemies within one entry flight, single file. */
-  entryStaggerMs: 160,
-  /** Gap between one entry flight setting off and the next one following. */
-  groupIntervalMs: 2200,
 };
 
 /**
@@ -396,18 +388,7 @@ export const FLAG_ART = {
   },
 };
 
-export const CHALLENGING = {
-  /** Enemies fly through without stopping; nothing shoots back. */
-  passDurationMs: 4200,
-  /** Gap between successive enemies within one wave, single file. */
-  staggerMs: 150,
-  /**
-   * Gap between one wave of eight setting off and the next.
-   *
-   * The bonus round is five waves of eight, not one stream of forty. The
-   * interval is what makes it readable: a wave traces its route and is mostly
-   * clear before the next one enters, so the player can lead the line and take
-   * all eight rather than spraying at a continuous blur.
-   */
-  groupIntervalMs: 2400,
-};
+// The Challenging Stage no longer has timing constants of its own: the same
+// caravan byte-stream launcher that runs a combat stage runs the bonus round,
+// on the challenge rows -- with the ROM's own inter-wave wait (all launched
+// members gone plus the 2-tick game timer, ~1 s at 2 Hz).
