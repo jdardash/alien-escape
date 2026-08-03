@@ -221,7 +221,10 @@ export function createStageRng(stage) {
  * `| 0x40` when the MSB-first RLC bit of ctl is set -- so a wave's transient
  * IDs come from {0x38, 0x3A, 0x3C, 0x3E}, redmoths carrying the 0x40 flag.
  */
-export function compileCaravanStream(row, rng = createStageRng(0)) {
+/** The captured-fighter object the rogue tail launches (gg1-3.s:1413-1414). */
+export const ROGUE_FIGHTER_OBJECT = 0x04;
+
+export function compileCaravanStream(row, rng = createStageRng(0), { rogueTail = false } = {}) {
   const stream = [WAVE_START];
 
   for (let wave = 0; wave < CARAVAN_FLIGHTS; wave += 1) {
@@ -266,14 +269,40 @@ export function compileCaravanStream(row, rng = createStageRng(0)) {
     stream.push(WAVE_START);
   }
 
-  // The final 0x7E is overwritten with the end token (l_2681).
-  stream[stream.length - 1] = STREAM_END;
+  // The final 0x7E is overwritten with the end token -- unless a rogue
+  // fighter is loose in the mob. `l_2681_end_of_table` (gg1-3.s:1388-1421)
+  // then overwrites the 0x7E with one more launch pair before closing:
+  // the path byte four bytes back (the last wave's LEFTY byte) and object
+  // 0x04, the captured-fighter object -- whose sprite it dresses as the red
+  // fighter (`sprite_code[0x04] = 0x80 + 0x07`, code 0 colour 7,
+  // gg1-3.s:1416-1417). The unrescued ship flies back in at the tail of the
+  // caravan and takes up residence in the mob.
+  if (rogueTail && stream.length >= 5) {
+    stream[stream.length - 1] = stream[stream.length - 5];
+    stream.push(ROGUE_FIGHTER_OBJECT, STREAM_END);
+  } else {
+    stream[stream.length - 1] = STREAM_END;
+  }
   return stream;
 }
 
-/** The stage's stream: row selection plus compile, seeded per stage. */
-export function compileStageStream(stage, rank = DifficultyRank.A, rng = createStageRng(stage)) {
-  return compileCaravanStream(caravanRawRowFor(stage, rank), rng);
+/**
+ * The stage's stream: row selection plus compile, seeded per stage.
+ *
+ * `rogueTail` asks for the l_2681 append; it is ignored on a challenge row,
+ * as the ROM ignores it -- "doesn't matter on a challenge stage"
+ * (gg1-3.s:1400-1402).
+ */
+export function compileStageStream(
+  stage,
+  rank = DifficultyRank.A,
+  rng = createStageRng(stage),
+  { rogueTail = false } = {},
+) {
+  const challenge = (stage + 1) % 4 === 0;
+  return compileCaravanStream(caravanRawRowFor(stage, rank), rng, {
+    rogueTail: rogueTail && !challenge,
+  });
 }
 
 // ------------------------------------------------------- the f_2916 walker

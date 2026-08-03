@@ -18,6 +18,7 @@ import {
   slotMotionOffset,
   slotWorldPosition,
   clampFormationCentre,
+  rogueFighterSlot,
 } from '../src/systems/formation.js';
 import { CARAVAN_ROWS } from '../src/systems/caravans.js';
 import { DB_ATTK_WAV_IDS } from '../src/systems/caravanData.js';
@@ -91,6 +92,22 @@ describe('object IDs onto slots (sprt_fmtn_hpos)', () => {
     for (const id of [0x00, 0x02, 0x04, 0x06, 0x38, 0x3a, 0x3c, 0x3e]) {
       expect(slotIndexForObjectId(id)).toBeNull();
     }
+  });
+
+  // The rogue fighter object the l_2681 caravan tail flies parks on the
+  // ROM's row 0, above the bosses: `sprt_fmtn_hpos[0x04]` decodes to row 0,
+  // column 4 (gg1-5.s:185-191).
+  it('builds the rogue row post above the bosses for object 0x04', () => {
+    const slot = rogueFighterSlot(0x04);
+    expect(slot).not.toBeNull();
+    expect(slot.row).toBe(-1);
+    expect(slot.gridY).toBe(-1);
+    expect(slot.column).toBe(4);
+    expect(slot.gridX).toBe(4 - 4.5);
+  });
+
+  it('refuses to build a rogue post for a live formation ID', () => {
+    expect(rogueFighterSlot(0x30)).toBeNull();
   });
 });
 

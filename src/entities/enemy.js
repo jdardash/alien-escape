@@ -86,6 +86,37 @@ export function createTransientEnemy(scene, group, type, position, frame = 0) {
 }
 
 /**
+ * The rogue fighter riding the caravan tail back in.
+ *
+ * A captured ship that was never rescued and never shot returns with the
+ * next stage's entry stream: `l_2681` (gg1-3.s:1388-1421) appends object
+ * 0x04 to the last wave and dresses it as the red fighter (sprite code 0,
+ * colour 7). It flies the wave's lefty entrance, parks on the ROM's rogue
+ * row above the bosses, and counts toward the stage like any mob member --
+ * but it never dives on its own, never bombs, and is scored by the
+ * captured-fighter rule (500 parked, 1,000 flying with the popup).
+ */
+export function createRogueFighter(scene, group, position, slot, frame = 0) {
+  const enemy = group.create(position.x, position.y, shipTextureKey('captive')).setOrigin(0.5);
+  applyShipArt(enemy, 'captive', { frame });
+  enemy.artName = 'captive';
+
+  enemy.body.setSize(enemy.width * 0.62, enemy.height * 0.62, true);
+  enemy.body.setAllowGravity(false);
+
+  enemy.slot = slot;
+  enemy.enemyType = null;
+  enemy.health = 1;
+  enemy.mode = EnemyMode.ENTERING;
+  enemy.flight = null;
+  enemy.hasBombed = false;
+  enemy.rogueFighter = true;
+  enemy.bombMask = 0;
+
+  return enemy;
+}
+
+/**
  * Show that a Boss Galaga has taken its first of two hits.
  *
  * A swap to the damaged palette rather than a tint over the healthy one. Both
@@ -107,10 +138,18 @@ export function isDiving(enemy) {
  *
  * A Zako part-way through its transform pulse is excluded: it is about to be
  * replaced by the bonus trio, and letting it be picked for a dive as well left
- * the trio spawning from wherever the dive had carried it.
+ * the trio spawning from wherever the dive had carried it. So is the parked
+ * rogue fighter: in the ROM it only ever leaves the grid as an extra wingman
+ * on a boss sortie (`l_1CE3`, gg1-2_fx.s:1221-1248), never on a launch of
+ * its own.
  */
 export function canBeginDive(enemy) {
-  return enemy.active && enemy.mode === EnemyMode.IN_FORMATION && !enemy.transforming;
+  return (
+    enemy.active &&
+    enemy.mode === EnemyMode.IN_FORMATION &&
+    !enemy.transforming &&
+    !enemy.rogueFighter
+  );
 }
 
 /**

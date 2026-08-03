@@ -24,6 +24,7 @@ import {
   isTransientId,
   normalizeRank,
   stepWaveLauncher,
+  ROGUE_FIGHTER_OBJECT,
 } from '../src/systems/caravans.js';
 import { D_COMBAT_STG_DAT } from '../src/systems/caravanData.js';
 
@@ -349,6 +350,38 @@ describe('the c_25A2 stream compile', () => {
     const a = compileCaravanStream(D_COMBAT_STG_DAT[8], createStageRng(1));
     const b = compileCaravanStream(D_COMBAT_STG_DAT[8], createStageRng(2));
     expect(a).toHaveLength(b.length);
+  });
+
+  // `l_2681_end_of_table` (gg1-3.s:1388-1421): with a rogue fighter loose,
+  // the closing 0x7E is overwritten with one more pair -- the byte four back
+  // (the last wave's lefty path byte) and object 0x04 -- before the 0x7F.
+  describe('the l_2681 rogue tail', () => {
+    it('appends [last lefty byte, 0x04] ahead of the end token', () => {
+      const plain = compileStageStream(4);
+      const tailed = compileStageStream(4, undefined, undefined, { rogueTail: true });
+
+      expect(tailed).toHaveLength(plain.length + 2);
+      expect(tailed.slice(0, plain.length - 1)).toEqual(plain.slice(0, -1));
+      expect(tailed.at(-1)).toBe(STREAM_END);
+      expect(tailed.at(-2)).toBe(ROGUE_FIGHTER_OBJECT);
+      // DE-4 in the ROM: the path byte of the second-to-last pair.
+      expect(tailed.at(-3)).toBe(plain.at(-5));
+    });
+
+    it('never rides a challenge row', () => {
+      expect(compileStageStream(3, undefined, undefined, { rogueTail: true })).toEqual(
+        compileStageStream(3),
+      );
+    });
+
+    it('walks out of the launcher as an ordinary launch', () => {
+      const stream = compileStageStream(1, undefined, undefined, { rogueTail: true });
+      const { launches, completed } = runLauncher(createWaveLauncher(stream), 4000, {
+        bugsFlying: 0,
+      });
+      expect(completed).toBe(true);
+      expect(launches.at(-1).rawObjectId).toBe(ROGUE_FIGHTER_OBJECT);
+    });
   });
 });
 

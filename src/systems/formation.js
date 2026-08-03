@@ -101,6 +101,28 @@ export function slotIndexForObjectId(objectId) {
   return SLOT_BY_CELL.get(`${cell.romRow - 1}:${cell.column}`) ?? null;
 }
 
+/**
+ * A synthetic slot on the ROM's row 0 -- the rogue/captured-fighter rank
+ * above the bosses -- for the fighter object the l_2681 caravan tail flies
+ * back in (IDs 0x00-0x06, `sprt_fmtn_hpos` rows `(Y-0x14)/2 == 0`). Our
+ * slot rows are the ROM's rows minus one, so this rank is row -1: the
+ * motion machine already carries it (`rowOffsets[slot.row + 1]` is the ROM
+ * row-0 entry) and world placement is plain arithmetic on `gridY`.
+ */
+export function rogueFighterSlot(objectId = 0x04) {
+  const cell = formationCellFor(objectId);
+  if (!cell || cell.romRow !== 0) return null;
+  const centreColumn = (FORMATION_COLUMNS - 1) / 2;
+  return {
+    index: null,
+    row: -1,
+    column: cell.column,
+    type: null,
+    gridX: cell.column - centreColumn,
+    gridY: -1,
+  };
+}
+
 /** Galaga brings its wave on as flights of eight, not one stream of forty. */
 export const ENTRY_GROUP_SIZE = 8;
 
