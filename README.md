@@ -3,7 +3,7 @@
 A Galaga replica for the browser, where the game rules live in pure, dependency-free ES modules that never import Phaser, so they can be unit tested headlessly. The Phaser scenes are thin orchestration over that logic.
 
 [![CI](https://img.shields.io/github/actions/workflow/status/jdardash/alien-escape/ci.yml?branch=main&label=CI)](https://github.com/jdardash/alien-escape/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-756%20passing-success)](tests/)
+[![Tests](https://img.shields.io/badge/tests-770%20passing-success)](tests/)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Build step](https://img.shields.io/badge/build%20step-none-lightgrey)](index.html)
 
@@ -138,7 +138,7 @@ These were found by reading the original `GameScene.js` before rewriting it. The
 
 ```bash
 npm install
-npm test        # vitest run - 756 tests across 30 files
+npm test        # vitest run - 770 tests across 30 files
 npm run lint    # eslint .
 ```
 
