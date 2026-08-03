@@ -22,11 +22,12 @@
     "node": ">=20"
   },
   "scripts": {
+    "start": "node tools/serve.js",
+    "serve": "node tools/serve.js --no-open",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
-    "serve": "python -m http.server 8000"
+    "lint:fix": "eslint . --fix"
   },
   "keywords": [
     "phaser3",
