@@ -44,6 +44,7 @@ import {
   slotMotionOffset,
   createFormationMotion,
   advanceFormationMotion,
+  rogueFighterSlot,
   FORMATION_SIZE,
 } from '../systems/formation.js';
 import {
@@ -52,6 +53,7 @@ import {
   stepWaveLauncher,
   decodeLaunch,
   caravanHeaderFor,
+  ROGUE_FIGHTER_OBJECT,
 } from '../systems/caravans.js';
 import {
   returnPath,
@@ -104,10 +106,15 @@ import {
   scoreFor,
   extraLivesEarned,
   PERFECT_BONUS,
-  CAPTURED_FIGHTER_POINTS,
+  CAPTIVE_FLYING_POINTS,
+  CAPTIVE_PARKED_POINTS,
   transformKillPoints,
+  transformSetPoints,
   TRANSFORM_SET_SIZE,
   CHALLENGING_STAGE_HIT_POINTS,
+  CHALLENGE_WAVE_SIZE,
+  challengeKillPoints,
+  challengeWaveBonus,
 } from '../systems/scoring.js';
 import {
   isChallengingStage,
@@ -173,6 +180,7 @@ import {
   EnemyMode,
   createEnemy,
   createTransientEnemy,
+  createRogueFighter,
   isDiving,
   canBeginDive,
   settleIntoFormation,
@@ -271,6 +279,11 @@ export class GameScene extends Phaser.Scene {
     this.stageResolving = false;
     this.formationElapsed = 0;
     this.challengingHits = 0;
+    this.challengeWaveTally = CHALLENGE_WAVE_SIZE;
+    // The l_2681 flag: a captured fighter went rogue and left un-shot, so
+    // the next combat caravan carries it back in. Deliberately NOT reset per
+    // stage -- the ROM's capture flag survives until the ship is destroyed.
+    this.rogueAtLarge = false;
     this.formationMotion = createFormationMotion();
     this.formationHandoff = false;
     this.waveLauncher = null;
@@ -757,10 +770,15 @@ export class GameScene extends Phaser.Scene {
     });
 
     this.physics.add.overlap(this.player, this.enemies, (_player, enemy) => {
-      // Challenging Stage enemies fly through without attacking, exactly as
-      // they do in the arcade. Their pass crosses the player's lane, so this
-      // guard is what keeps the bonus round a bonus.
-      if (this.challenging) return;
+      // The ROM's ram gate is not a challenge-stage rule: while the attack
+      // wave supervisor `f_2916` is running, the fighter's collision scan
+      // covers ONLY the transients (objects 0x38-0x3E) and bombs
+      // (`hitd_fghtr_notif`, gg1-5.s:802-815). A caravan member flying in
+      // to its slot passes through the ship; and since a challenge round
+      // keeps f_2916 alive until its last stragglers leave the sky
+      // (`l_2A29`, gg1-3.s:1899-1905), the bonus round's whole immunity
+      // falls out of the same gate.
+      if (this.entryScanExcludes(enemy)) return;
       if (!this.canBeHurt() || !enemy.active) return;
       // Ramming a captor that owns a slave is a kill without the rescue
       // conditions: the slave is orphaned rather than stranded in HELD.
@@ -779,7 +797,7 @@ export class GameScene extends Phaser.Scene {
     // The second ship is as solid as the first, which is what the doubled
     // firepower is paid for.
     this.physics.add.overlap(this.wingman, this.enemies, (_wingman, enemy) => {
-      if (this.challenging) return;
+      if (this.entryScanExcludes(enemy)) return;
       if (!this.canBeHurt() || !enemy.active) return;
       const orphans = enemy.captiveAttached === true;
       this.destroyEnemy(enemy, false);
@@ -821,6 +839,18 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  /**
+   * `hitd_fghtr_notif`'s wave-phase scan restriction (gg1-5.s:802-815):
+   * while `f_2916` is walking the caravan stream, only transients can ram
+   * the fighter. Bombs always can; divers cannot exist yet, because the
+   * bomber tasks are only enabled when the walker retires (`l_2A29`,
+   * gg1-3.s:1899-1908).
+   */
+  entryScanExcludes(enemy) {
+    if (!this.waveLauncher || this.waveLauncher.done) return false;
+    return enemy.transient !== true;
+  }
+
   // ----------------------------------------------------------------- stages
 
   beginStage(stage) {
@@ -832,6 +862,9 @@ export class GameScene extends Phaser.Scene {
     this.stageResolving = false;
     this.formationElapsed = 0;
     this.challengingHits = 0;
+    // `w_bug_flying_hit_cnt`, reloaded to 8 at challenge stage start
+    // (task_man.s:220-224) and again as each wave opens.
+    this.challengeWaveTally = CHALLENGE_WAVE_SIZE;
     this.difficulty = stageDifficulty(this.round, this.rank);
     this.challenging = isChallengingStage(stage);
     this.transformType = transformTypeFor(stage);
@@ -880,13 +913,12 @@ export class GameScene extends Phaser.Scene {
     this.captiveSettled = false;
     this.bonusBee = { spent: false, bee: null, timer: null, ticks: 0 };
 
-    // STAGE n, then READY, then the wave -- the cabinet's own cadence, cut
-    // inside the same 1800ms the single banner used to hold, so nothing about
-    // when the formation actually arrives has moved.
-    this.showBanner(this.challenging ? 'CHALLENGING STAGE' : `STAGE ${stage}`, 1100);
-    this.time.delayedCall(1100, () => {
-      if (!this.isGameOver) this.showBanner('READY', 700);
-    });
+    // STAGE n (or CHALLENGING STAGE), then the wave. The cabinet never says
+    // READY here: the splash prints "STAGE X" into the very tile row READY
+    // uses, and the READY string is only ever drawn on the mid-stage respawn
+    // path (game_ctrl.s:794-796, gated on enemies still active;
+    // `plyr_respawn_rdy` then erases "READY or STAGE X", game_ctrl.s:878-880).
+    this.showBanner(this.challenging ? 'CHALLENGING STAGE' : `STAGE ${stage}`, 1800);
     this.sfx[this.challenging ? 'challengeStart' : 'stageFlag'].play({ volume: 0.5 });
     this.refreshHud();
 
@@ -911,7 +943,13 @@ export class GameScene extends Phaser.Scene {
    */
   startWaveLauncher() {
     this.formationSlots = buildFormationSlots();
-    this.waveLauncher = createWaveLauncher(compileStageStream(this.stage, this.rank));
+    // The l_2681 tail: an unrescued rogue fighter still at large rides back
+    // in at the end of the stream -- combat rows only, and only while the
+    // player flies a single ship (gg1-3.s:1392-1402).
+    const rogueTail = this.rogueAtLarge && !hasDualFighter(this.captureState);
+    this.waveLauncher = createWaveLauncher(
+      compileStageStream(this.stage, this.rank, undefined, { rogueTail }),
+    );
     this.waveEnabled = true;
     this.launcherAccMs = 0;
   }
@@ -932,7 +970,7 @@ export class GameScene extends Phaser.Scene {
     while (frames > 0) {
       frames -= 1;
       const flying = this.countFlyingEntries();
-      const { state, launch, completed } = stepWaveLauncher(this.waveLauncher, {
+      const { state, launch, completed, hitTallyReset } = stepWaveLauncher(this.waveLauncher, {
         enabled: this.waveEnabled && this.player.active,
         bugsFlying: flying,
         inFlight: flying,
@@ -940,6 +978,10 @@ export class GameScene extends Phaser.Scene {
       });
       this.waveLauncher = state;
 
+      // `w_bug_flying_hit_cnt` reloads to 8 as each challenge wave opens
+      // (`f_2916`, gg1-3.s:1689-1695): the all-eight bonus is per wave, and
+      // a wave that let one through does not poison the next.
+      if (hitTallyReset) this.challengeWaveTally = CHALLENGE_WAVE_SIZE;
       if (launch) this.spawnWaveMember(launch);
       if (completed) {
         this.onWaveLauncherComplete();
@@ -990,6 +1032,20 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
+    // The l_2681 tail: the rogue fighter flies the last wave's lefty
+    // entrance and parks on the ROM's rogue row above the bosses.
+    if (info.objectId === ROGUE_FIGHTER_OBJECT) {
+      const enemy = createRogueFighter(
+        this,
+        this.enemies,
+        start,
+        rogueFighterSlot(info.objectId),
+        this.flapFrame,
+      );
+      enemy.flight = flight();
+      return;
+    }
+
     const slot = this.formationSlots[slotIndexForObjectId(info.objectId)];
     const enemy = createEnemy(this, this.enemies, slot, start, this.flapFrame);
 
@@ -1028,14 +1084,18 @@ export class GameScene extends Phaser.Scene {
       this.sfx.challengeClear.play({ volume: 0.5 });
       this.sfx[challengeResultSound(this.challengingHits, FORMATION_SIZE)].play({ volume: 0.6 });
 
-      // The cabinet's own wording. A round that fell short reports the total
-      // already paid at 100 a hit rather than paying it again here; only the
-      // perfect bonus is awarded at the end, because only it is a bonus.
+      // The results screen PAYS what it shows. `gctl_chllng_stg_end` adds
+      // the hit count to `_bug_collsn[$0F]` -- 100 points a unit -- and
+      // calls the scorer (game_ctrl.s:940-990); a perfect round takes the
+      // 10,000 INSTEAD of hits x 100 (the `jr z` past the BONUS branch,
+      // game_ctrl.s:928-930). An earlier revision displayed the bonus and
+      // never credited it.
       if (perfect) {
         this.addScore(PERFECT_BONUS);
         this.showBanner(`PERFECT!!\nSPECIAL BONUS ${PERFECT_BONUS} PTS`, 2200);
       } else {
         const paid = this.challengingHits * CHALLENGING_STAGE_HIT_POINTS;
+        this.addScore(paid);
         this.showBanner(`NUMBER OF HITS ${this.challengingHits}\nBONUS ${paid} PTS`, 2200);
       }
     }
@@ -1701,7 +1761,11 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
-    // FF: the rogue fighter left the field for good.
+    // FF: the rogue fighter left the field -- but not for good. A rogue that
+    // was never shot is still the enemy's prize, and the ROM carries it back
+    // in at the tail of the next combat caravan (`l_2681`,
+    // gg1-3.s:1388-1421).
+    if (captive.rogue) this.rogueAtLarge = true;
     this.clearCaptive();
   }
 
@@ -1800,39 +1864,70 @@ export class GameScene extends Phaser.Scene {
 
       this.addScore(points);
       // Only the set bonus is worth announcing; 160 on its own is an ordinary
-      // kill. The announcement is the cabinet's: the value, in blue, where
-      // the third ship died.
-      if (set.remaining === 0) this.spawnScorePopup(x, y, points);
+      // kill. The cabinet's popup is a FIXED sprite showing the set value --
+      // $38/$3C/$3D for 1000/2000/3000 (`d_1B59`, gg1-2_fx.s:837-840) --
+      // not the computed ship-plus-set total.
+      if (set.remaining === 0) this.spawnScorePopup(x, y, transformSetPoints(set.type));
       return;
     }
 
-    if (this.challenging) {
-      this.challengingHits += 1;
-      this.addScore(scoreFor(enemy.enemyType, { challenging: true }));
+    // The rogue fighter is scored as the captured fighter it still is:
+    // colour 7's 500, doubled to 1,000 with the popup while it flies
+    // (gg1-5.s:1305-1311 with `d_scoreman_inc_lut`, game_ctrl.s:1290).
+    if (enemy.rogueFighter) {
+      const flying = enemy.mode !== EnemyMode.IN_FORMATION;
+      const points = flying ? CAPTIVE_FLYING_POINTS : CAPTIVE_PARKED_POINTS;
+      const { x, y } = enemy;
+      this.addScore(points);
       this.destroyEnemy(enemy, true);
+      if (flying) this.spawnScorePopup(x, y, points);
       return;
     }
 
     enemy.health -= 1;
 
-    // A Boss Galaga survives its first hit and changes colour to show it.
+    // A Boss Galaga survives its first hit and changes colour to show it --
+    // in a Challenging Stage too: `c_2896` dresses the challenge bosses in
+    // the same colour-0 green (gg1-3.s:1582-1583), so the two-hit rule is
+    // not a combat-stage special case.
     if (enemy.health > 0) {
       showBossDamage(enemy, this.flapFrame);
       this.sfx[deathSoundFor(enemy.enemyType, { destroyed: false })].play({ volume: 0.4 });
       return;
     }
 
+    if (this.challenging) {
+      this.challengingHits += 1;
+      this.challengeWaveTally = Math.max(this.challengeWaveTally - 1, 0);
+      const completesWave = this.challengeWaveTally === 0;
+      const points = challengeKillPoints(enemy.enemyType, this.stage, { completesWave });
+      const { x, y } = enemy;
+      this.addScore(points);
+      this.destroyEnemy(enemy, true);
+      // The eighth kill of a wave flashes the wave bonus itself
+      // (gg1-5.s:1289-1300); a boss kill otherwise flashes its 400, the
+      // same `$B5` popup it carries on a combat stage (task_man.s:302-303).
+      if (completesWave) this.spawnScorePopup(x, y, challengeWaveBonus(this.stage));
+      else if (enemy.enemyType === EnemyType.BOSS) this.spawnScorePopup(x, y, points);
+      return;
+    }
+
+    // "Diving" to the scorer is any motion-queue state -- the ROM counts two
+    // value units for a moving target and one for a resting one
+    // (gg1-5.s:1244-1252), so a kill on the way IN or on the glide home pays
+    // the flying value too, not just a kill mid-dive.
+    const flying = enemy.mode !== EnemyMode.IN_FORMATION;
     const points = scoreFor(enemy.enemyType, {
-      diving: isDiving(enemy),
+      diving: flying,
       escorts: enemy.escortCount ?? 0,
     });
     this.addScore(points);
 
-    // The cabinet's famous blue number: a Boss Galaga shot down mid-dive
-    // flashes what it paid -- 400, 800, 1600 with its escorts -- at the spot
-    // it died. Formation kills stay silent; the popup is the reward for the
-    // harder shot.
-    if (enemy.enemyType === EnemyType.BOSS && isDiving(enemy)) {
+    // The cabinet's famous blue number: a Boss Galaga shot down in flight
+    // flashes what it paid -- 400 alone (fly-in included: the stage init
+    // arms every boss slot with the `01 B5` default, task_man.s:302-303),
+    // 800 or 1600 with its escorts. Formation kills stay silent.
+    if (enemy.enemyType === EnemyType.BOSS && flying) {
       this.spawnScorePopup(enemy.x, enemy.y, points);
     }
 
@@ -1863,7 +1958,9 @@ export class GameScene extends Phaser.Scene {
     if (midBeamOrPull) {
       this.releaseFromBeam();
     } else if (outcome === RescueOutcome.RESCUED) {
-      this.addScore(CAPTURED_FIGHTER_POINTS);
+      // The rescue pays nothing of its own: the ROM's rescue branch flips
+      // the ship white and starts the music (gg1-5.s:1339-1361) without
+      // touching `_bug_collsn`. The boss kill itself already paid.
       this.rescueCaptive();
     } else if (outcome === RescueOutcome.ORPHANED || outcome === RescueOutcome.ROGUE) {
       this.loseCaptive(outcome);
@@ -1890,9 +1987,9 @@ export class GameScene extends Phaser.Scene {
   /**
    * The player shot their own captured fighter.
    *
-   * Counts as a hit, pays 1,000, and ends the capture: the captor is unflagged
-   * so that killing it later cannot rescue a ship that no longer exists, and
-   * the state machine is driven to IDLE through the same `CAPTIVE_DESTROYED`
+   * Counts as a hit and ends the capture: the captor is unflagged so that
+   * killing it later cannot rescue a ship that no longer exists, and the
+   * state machine is driven to IDLE through the same `CAPTIVE_DESTROYED`
    * transition the "captor died in formation" path uses.
    */
   onCaptiveShot() {
@@ -1900,14 +1997,19 @@ export class GameScene extends Phaser.Scene {
 
     this.stats = recordHit(this.stats);
 
-    // The 1,000 is for shooting your OWN fighter -- pinned to its captor or
-    // diving beside it as an escort, a ship you could still have won back
-    // (the L2 branch, gg1-5.s:1305-1311). A rogue already lost when its
-    // captor died in formation is gone either way, so shooting it down is
-    // just self-defence and pays nothing.
+    // The captured fighter is sprite colour 7, and colour 7 is priced like
+    // every other colour: 500 base (`d_scoreman_inc_lut[8]`,
+    // game_ctrl.s:1290), doubled while it flies. Parked on its captor it
+    // pays 500 with no popup (the plain notify, gg1-5.s:1201-1204,
+    // 1236-1247); on a flight of its own -- the escort dive beside its
+    // captor OR the rogue descent -- it pays 1,000 with the $38 popup
+    // (`l_0849`/`l_08B0`, gg1-5.s:1305-1311, 1384-1387).
+    const flying = Boolean(this.captive.flight);
+    const points = flying ? CAPTIVE_FLYING_POINTS : CAPTIVE_PARKED_POINTS;
+    this.addScore(points);
+    if (flying) this.spawnScorePopup(this.captive.x, this.captive.y, points);
+
     if (!this.captive.rogue) {
-      this.addScore(CAPTURED_FIGHTER_POINTS);
-      this.spawnScorePopup(this.captive.x, this.captive.y, CAPTURED_FIGHTER_POINTS);
       if (this.captor) this.captor.captiveAttached = false;
       this.captureState = transition(this.captureState, CaptureEvent.CAPTIVE_DESTROYED);
     }
@@ -2009,6 +2111,10 @@ export class GameScene extends Phaser.Scene {
       this.sfx[deathSoundFor(enemy.enemyType)].play({ volume: 0.4 });
     }
 
+    // However the rogue dies -- shot or rammed -- the enemy's claim on it
+    // ends, and the caravan tail stops flying.
+    if (enemy.rogueFighter) this.rogueAtLarge = false;
+
     if (enemy === this.captor) {
       this.captor = null;
       this.beamRomX = null;
@@ -2106,7 +2212,10 @@ export class GameScene extends Phaser.Scene {
     this.player.setAngle(0);
     this.makeInvulnerable(PLAYER.invulnerableMs);
 
-    // The cabinet says READY over every fresh fighter, not only stage one.
+    // READY is the RESPAWN banner, and only that: the ROM prints it on the
+    // mid-stage respawn path alone (game_ctrl.s:794-796, when enemies are
+    // still active) -- a stage start prints STAGE X in the same tile row
+    // instead.
     this.showBanner('READY', 900);
   }
 

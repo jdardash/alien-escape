@@ -7,6 +7,12 @@ import {
   SECOND_EXTRA_LIFE,
   EXTRA_LIFE_INTERVAL,
   CHALLENGING_STAGE_HIT_POINTS,
+  CHALLENGE_WAVE_SIZE,
+  challengeColorFor,
+  challengeKillPoints,
+  challengeWaveBonus,
+  CAPTIVE_PARKED_POINTS,
+  CAPTIVE_FLYING_POINTS,
   transformSetPoints,
   transformKillPoints,
   TRANSFORM_SET_SIZE,
@@ -93,14 +99,79 @@ describe('diving values', () => {
   });
 });
 
+describe('captured-fighter values', () => {
+  // Colour 7 in d_scoreman_inc_lut (game_ctrl.s:1290): 500 base, and the
+  // flight premium doubles it like any other colour (gg1-5.s:1244-1252).
+  it('pays 500 parked and 1000 flying', () => {
+    expect(CAPTIVE_PARKED_POINTS).toBe(500);
+    expect(CAPTIVE_FLYING_POINTS).toBe(1000);
+  });
+});
+
 describe('challenging stages', () => {
-  it('pays a flat rate regardless of type or dive state', () => {
-    for (const type of [EnemyType.ZAKO, EnemyType.GOEI, EnemyType.BOSS]) {
-      expect(scoreFor(type, { challenging: true })).toBe(CHALLENGING_STAGE_HIT_POINTS);
-      expect(scoreFor(type, { challenging: true, diving: true })).toBe(
-        CHALLENGING_STAGE_HIT_POINTS,
-      );
+  // d_290E (gg1-3.s:1641-1642) decoded: the first round dresses its enemies
+  // in colour 3 (the yellowbee's 50), every later round in a colour worth 80.
+  it('colours the first round as bees and the rest as specials', () => {
+    expect(challengeColorFor(3)).toBe(3);
+    for (const stage of [7, 11, 15, 19, 23, 27, 31]) {
+      expect([2, 4, 5, 6]).toContain(challengeColorFor(stage));
     }
+  });
+
+  it('wraps the round dressing table after eight challenge stages', () => {
+    expect(challengeColorFor(35)).toBe(challengeColorFor(3));
+  });
+
+  it('pays 100 a kill on the first challenge round', () => {
+    expect(challengeKillPoints(EnemyType.ZAKO, 3)).toBe(100);
+    expect(challengeKillPoints(EnemyType.GOEI, 3)).toBe(100);
+  });
+
+  it('pays 160 a kill on every later challenge round', () => {
+    for (const stage of [7, 11, 15, 19, 23, 27, 31]) {
+      expect(challengeKillPoints(EnemyType.ZAKO, stage)).toBe(160);
+      expect(challengeKillPoints(EnemyType.GOEI, stage)).toBe(160);
+    }
+  });
+
+  // 300 from the doubled blue-boss base plus the 01B5 default scode
+  // (task_man.s:302-303): the same 400 a lone flying boss pays anywhere.
+  it('pays a challenge boss the flying 400', () => {
+    expect(challengeKillPoints(EnemyType.BOSS, 3)).toBe(400);
+    expect(challengeKillPoints(EnemyType.BOSS, 7)).toBe(400);
+  });
+
+  // d_stage_chllg_rnd_attrib (gg1-3.s:1633-1637), stepped every eight
+  // stages and clamped at the 3000 row from stage 32 on.
+  it('steps the all-eight wave bonus 1000/1500/2000/3000', () => {
+    expect(challengeWaveBonus(3)).toBe(1000);
+    expect(challengeWaveBonus(7)).toBe(1000);
+    expect(challengeWaveBonus(11)).toBe(1500);
+    expect(challengeWaveBonus(15)).toBe(1500);
+    expect(challengeWaveBonus(19)).toBe(2000);
+    expect(challengeWaveBonus(23)).toBe(2000);
+    expect(challengeWaveBonus(27)).toBe(3000);
+    expect(challengeWaveBonus(31)).toBe(3000);
+    expect(challengeWaveBonus(35)).toBe(3000);
+    expect(challengeWaveBonus(103)).toBe(3000);
+  });
+
+  it('adds the wave bonus to the kill that completes a wave of eight', () => {
+    expect(CHALLENGE_WAVE_SIZE).toBe(8);
+    expect(challengeKillPoints(EnemyType.ZAKO, 3, { completesWave: true })).toBe(100 + 1000);
+    expect(challengeKillPoints(EnemyType.GOEI, 11, { completesWave: true })).toBe(160 + 1500);
+  });
+
+  // The eighth kill routes through the wave-bonus notify and skips the
+  // boss's scode (gg1-5.s:1283-1300): 300 + bonus, not 400 + bonus.
+  it('drops the boss scode on the wave-completing kill', () => {
+    expect(challengeKillPoints(EnemyType.BOSS, 3, { completesWave: true })).toBe(300 + 1000);
+  });
+
+  // The results tally pays 100 a hit (d_scoreman_inc_lut[0] = 0x10 applied
+  // to _bug_collsn[$0F], game_ctrl.s:940-990).
+  it('rates the results-screen bonus at 100 a hit', () => {
+    expect(CHALLENGING_STAGE_HIT_POINTS).toBe(100);
   });
 });
 
